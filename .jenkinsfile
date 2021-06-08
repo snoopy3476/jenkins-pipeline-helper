@@ -1,39 +1,47 @@
-node() {
+pipeline {
 
+	agent any
 	// notify GitLab with stages: build, test, push
-	gitlabBuilds(builds: ['build', 'test', 'push']) {
+	//gitlabBuilds(builds: ['build', 'test', 'push']) {
 
+	stages {
 		// build stage
 		stage('build') {
-			echo 'Notify to GitLab - build stage pending'
-			updateGitlabCommitStatus name: 'build', state: 'pending'
+			steps {
+				echo 'Notify to GitLab - build stage pending'
+				updateGitlabCommitStatus name: 'build', state: 'pending'
 
-			echo '- Build'
+				echo '- Build'
 
-			echo 'Notify to GitLab - build stage success'
-			updateGitlabCommitStatus name: 'build', state: 'success'
+				echo 'Notify to GitLab - build stage success'
+				updateGitlabCommitStatus name: 'build', state: 'success'
+			}
 		}
 
 		// test stage
 		stage('test') {
-			echo 'Notify to GitLab - test stage success'
-			updateGitlabCommitStatus name: 'test', state: 'pending'
+			steps {
+				echo 'Notify to GitLab - test stage success'
+				updateGitlabCommitStatus name: 'test', state: 'pending'
 
-			echo '- Test'
+				echo '- Test'
 
-			echo 'Notify to GitLab - test stage success'
-			updateGitlabCommitStatus name: 'test', state: 'success'
+				echo 'Notify to GitLab - test stage success'
+				updateGitlabCommitStatus name: 'test', state: 'success'
+			}
 		}
 
 		// pull stage
 		stage('push') {
-			echo 'Notify to GitLab - push stage success'
-			updateGitlabCommitStatus name: 'push', state: 'pending'
+			steps {
+				echo 'Notify to GitLab - push stage success'
+				updateGitlabCommitStatus name: 'push', state: 'pending'
 
-			echo '- Push'
+				echo '- Push'
 
-			echo 'Notify to GitLab - push stage success'
-			updateGitlabCommitStatus name: 'push', state: 'success'
+				echo 'Notify to GitLab - push stage success'
+				updateGitlabCommitStatus name: 'push', state: 'success'
+			}
 		}
 	}
 }
