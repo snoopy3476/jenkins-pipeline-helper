@@ -12,6 +12,7 @@ pipeline {
 				updateGitlabCommitStatus name: 'build', state: 'pending'
 
 				echo '- Build'
+				sleep 10
 
 				echo 'Notify to GitLab - build stage success'
 				updateGitlabCommitStatus name: 'build', state: 'success'
@@ -25,6 +26,7 @@ pipeline {
 				updateGitlabCommitStatus name: 'test', state: 'pending'
 
 				echo '- Test'
+				sleep 10
 
 				echo 'Notify to GitLab - test stage success'
 				updateGitlabCommitStatus name: 'test', state: 'success'
@@ -38,6 +40,7 @@ pipeline {
 				updateGitlabCommitStatus name: 'push', state: 'pending'
 
 				echo '- Push'
+				sleep 10
 
 				echo 'Notify to GitLab - push stage success'
 				updateGitlabCommitStatus name: 'push', state: 'success'
