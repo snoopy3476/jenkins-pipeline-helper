@@ -1,51 +1,70 @@
-GLOBAL_POD_TEMPLATE_TEST='
-apiVersion: v1
-kind: Pod
-spec:
-  containers:
-  - name: test
-    image: ubuntu:latest
-    command:
-    - sleep
-  - name: test2
-    image: ubuntu:latest
-    command:
-    - sleep
-'
 
+podTemplate(label: 'jenkins-slave-pod', 
+  containers: [
+    containerTemplate(
+      name: 'git',
+      image: 'alpine/git',
+      command: 'cat',
+      ttyEnabled: true
+    ),
+    containerTemplate(
+      name: 'maven',
+      image: 'maven:3.6.2-jdk-8',
+      command: 'cat',
+      ttyEnabled: true
+    ),
+    containerTemplate(
+      name: 'node',
+      image: 'node:8.16.2-alpine3.10',
+      command: 'cat',
+      ttyEnabled: true
+    ),
+    containerTemplate(
+      name: 'docker',
+      image: 'docker',
+      command: 'cat',
+      ttyEnabled: true
+    ),
+  ],
+  volumes: [ 
+    hostPathVolume(mountPath: '/var/run/docker.sock', hostPath: '/var/run/docker.sock'), 
+  ]) {
 
-podTemplate(yaml:GLOBAL_POD_TEMPLATE_TEST,workspaceVolume:hostPathWorkspaceVolume) {
+node('jenkins-slave-pod') {
 
-pipeline {
+//	agent {
+//		docker {
+//			image 'docker:dind'
+//			args '-u root:root -p 3000:3000 --privileged -v /var/run/docker.sock:/var/run/docker.sock'
+//		}
+//	}
 
-	agent {
-		docker {
-			image 'docker:dind'
-			args '-u root:root -p 3000:3000 --privileged -v /var/run/docker.sock:/var/run/docker.sock'
-		}
-	}
-
-	stages {
+//	stages {
 		// build stage
 		stage('build') {
 //			agent { docker 'gradle:6.9.0-jdk11' }
-			steps {
+//			steps {
 
+				container('docker') {
 				echo 'Notify to GitLab - build stage pending'
 				updateGitlabCommitStatus name: 'build', state: 'pending'
 
 				echo '- Build'
 				sleep 10
+				sh 'docker --help'
+//				bash docker
+				echo '+ Build!'
 
 				echo 'Notify to GitLab - build stage success'
 				updateGitlabCommitStatus name: 'build', state: 'success'
-			}
+				}
+//			}
 		}
 
 		// test stage
 		stage('test') {
 //			agent { docker 'gradle:6.9.0-jdk11' }
-			steps {
+//			steps {
 				echo 'Notify to GitLab - test stage success'
 				updateGitlabCommitStatus name: 'test', state: 'pending'
 
@@ -54,12 +73,12 @@ pipeline {
 
 				echo 'Notify to GitLab - test stage success'
 				updateGitlabCommitStatus name: 'test', state: 'success'
-			}
+//			}
 		}
 
 		// pull stage
 		stage('push') {
-			steps {
+//			steps {
 				echo 'Notify to GitLab - push stage success'
 				updateGitlabCommitStatus name: 'push', state: 'pending'
 
@@ -68,9 +87,9 @@ pipeline {
 
 				echo 'Notify to GitLab - push stage success'
 				updateGitlabCommitStatus name: 'push', state: 'success'
-			}
+//			}
 		}
-	}
+//	}
 }
 
 
