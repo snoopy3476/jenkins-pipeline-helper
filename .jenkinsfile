@@ -1,84 +1,66 @@
 
 podTemplate(label: 'jenkins-slave-pod', 
-  containers: [
-    containerTemplate(
-      name: 'git',
-      image: 'alpine/git',
-      command: 'cat',
-      ttyEnabled: true
-    ),
-    containerTemplate(
-      name: 'maven',
-      image: 'maven:3.6.2-jdk-8',
-      command: 'cat',
-      ttyEnabled: true
-    ),
-    containerTemplate(
-      name: 'node',
-      image: 'node:8.16.2-alpine3.10',
-      command: 'cat',
-      ttyEnabled: true
-    ),
-    containerTemplate(
-      name: 'docker',
-      image: 'docker',
-      command: 'cat',
-      ttyEnabled: true
-    ),
-  ],
-  volumes: [ 
-    hostPathVolume(mountPath: '/var/run/docker.sock', hostPath: '/var/run/docker.sock'), 
-  ]) {
+	image: 'jenkins/jnlp-agent-docker',
+	containers: [
+		containerTemplate(
+			name: 'docker',
+			image: 'docker',
+			command: 'cat',
+			ttyEnabled: true
+		),
+	],
+	volumes: [ 
+		hostPathVolume(mountPath: '/var/run/docker.sock', hostPath: '/var/run/docker.sock'), 
+	]) {
 
-node('jenkins-slave-pod') {
 
-//	agent {
-//		docker {
-//			image 'docker:dind'
-//			args '-u root:root -p 3000:3000 --privileged -v /var/run/docker.sock:/var/run/docker.sock'
-//		}
-//	}
+	node('jenkins-slave-pod') {
 
-//	stages {
-		// build stage
-		stage('build') {
-//			agent { docker 'gradle:6.9.0-jdk11' }
-//			steps {
+		container('docker') {
+			// build stage
+			stage('build') {
 
-				container('docker') {
+				sleep 10
+
 				echo 'Notify to GitLab - build stage pending'
 				updateGitlabCommitStatus name: 'build', state: 'pending'
 
 				echo '- Build'
 				sleep 10
 				sh 'docker --help'
-//				bash docker
+				sh 'touch tmplog; cat tmplog; echo "A" > tmplog'
 				echo '+ Build!'
 
 				echo 'Notify to GitLab - build stage success'
 				updateGitlabCommitStatus name: 'build', state: 'success'
+
+				sh 'touch tmplog; cat tmplog; echo "B" > tmplog'
+			}
+
+			// test stage
+			stage('test') {
+
+				docker.image('docker').inside {
+
+					echo 'Notify to GitLab - test stage success'
+					updateGitlabCommitStatus name: 'test', state: 'pending'
+
+					echo '- Test'
+					sleep 10
+					sh 'touch tmplog; cat tmplog; echo "C" > tmplog'
+
+					echo 'Notify to GitLab - test stage success'
+					updateGitlabCommitStatus name: 'test', state: 'success'
 				}
-//			}
-		}
+				
+				docker.image('docker').inside {
+					sh 'touch tmplog; cat tmplog; echo "D" > tmplog'
+				}
 
-		// test stage
-		stage('test') {
-//			agent { docker 'gradle:6.9.0-jdk11' }
-//			steps {
-				echo 'Notify to GitLab - test stage success'
-				updateGitlabCommitStatus name: 'test', state: 'pending'
+			}
 
-				echo '- Test'
-				sleep 10
-
-				echo 'Notify to GitLab - test stage success'
-				updateGitlabCommitStatus name: 'test', state: 'success'
-//			}
-		}
-
-		// pull stage
-		stage('push') {
-//			steps {
+			// pull stage
+			stage('push') {
 				echo 'Notify to GitLab - push stage success'
 				updateGitlabCommitStatus name: 'push', state: 'pending'
 
@@ -87,12 +69,7 @@ node('jenkins-slave-pod') {
 
 				echo 'Notify to GitLab - push stage success'
 				updateGitlabCommitStatus name: 'push', state: 'success'
-//			}
+			}
 		}
-//	}
-}
-
-
-
-
+	}
 }
