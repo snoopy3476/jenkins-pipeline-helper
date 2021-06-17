@@ -14,62 +14,76 @@ podTemplate(label: 'jenkins-slave-pod',
 	]) {
 
 
+
 	node('jenkins-slave-pod') {
 
-		container('docker') {
-			// build stage
-			stage('build') {
 
-				sleep 10
+		// notify pending stages
+		gitlabBuilds(builds: ['build', 'test', 'push']) {
 
-				echo 'Notify to GitLab - build stage pending'
-				updateGitlabCommitStatus name: 'build', state: 'pending'
 
-				echo '- Build'
-				sleep 10
-				sh 'docker --help'
-				sh 'touch tmplog; cat tmplog; echo "A" > tmplog'
-				echo '+ Build!'
 
-				echo 'Notify to GitLab - build stage success'
-				updateGitlabCommitStatus name: 'build', state: 'success'
+			container('docker') {
+				// build stage
+				stage('build') {
 
-				sh 'touch tmplog; cat tmplog; echo "B" > tmplog'
-			}
-
-			// test stage
-			stage('test') {
-
-				docker.image('docker').inside {
-
-					echo 'Notify to GitLab - test stage success'
-					updateGitlabCommitStatus name: 'test', state: 'pending'
-
-					echo '- Test'
 					sleep 10
-					sh 'touch tmplog; cat tmplog; echo "C" > tmplog'
 
-					echo 'Notify to GitLab - test stage success'
-					updateGitlabCommitStatus name: 'test', state: 'success'
-				}
-				
-				docker.image('docker').inside {
-					sh 'touch tmplog; cat tmplog; echo "D" > tmplog'
+					echo 'Notify to GitLab - build stage running'
+					updateGitlabCommitStatus name: 'build', state: 'running'
+
+					echo '- Build'
+					sleep 10
+					sh 'docker --help'
+					sh 'touch tmplog; cat tmplog; echo "A" > tmplog'
+					echo '+ Build!'
+
+					echo 'Notify to GitLab - build stage success'
+					updateGitlabCommitStatus name: 'build', state: 'success'
+
+					sh 'touch tmplog; cat tmplog; echo "B" > tmplog'
 				}
 
+				// test stage
+				stage('test') {
+
+					docker.image('docker').inside {
+
+						echo 'Notify to GitLab - test stage running'
+						updateGitlabCommitStatus name: 'test', state: 'running'
+
+						echo '- Test'
+						sleep 10
+						sh 'touch tmplog; cat tmplog; echo "C" > tmplog'
+
+						echo 'Notify to GitLab - test stage success'
+						updateGitlabCommitStatus name: 'test', state: 'success'
+					}
+					
+					docker.image('docker').inside {
+						sh 'touch tmplog; cat tmplog; echo "D" > tmplog'
+					}
+
+				}
+
+				// pull stage
+				stage('push') {
+					echo 'Notify to GitLab - push stage running'
+					updateGitlabCommitStatus name: 'push', state: 'running'
+
+					echo '- Push'
+					sleep 10
+
+					echo 'Notify to GitLab - push stage success'
+					updateGitlabCommitStatus name: 'push', state: 'success'
+				}
 			}
 
-			// pull stage
-			stage('push') {
-				echo 'Notify to GitLab - push stage success'
-				updateGitlabCommitStatus name: 'push', state: 'pending'
 
-				echo '- Push'
-				sleep 10
 
-				echo 'Notify to GitLab - push stage success'
-				updateGitlabCommitStatus name: 'push', state: 'success'
-			}
+
 		}
+
+
 	}
 }
