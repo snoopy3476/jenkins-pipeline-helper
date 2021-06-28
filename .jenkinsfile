@@ -1,3 +1,4 @@
+// Demo cycle JenkinsFile for Tmax CI/CD
 
 podTemplate(label: 'jenkins-slave-pod', 
 	image: 'jenkins/jnlp-agent-docker',
@@ -19,18 +20,18 @@ podTemplate(label: 'jenkins-slave-pod',
 
 
 		// notify pending stages
-		gitlabBuilds(builds: ['build', 'test', 'push']) {
+		gitlabBuilds(builds: ['01-build', '02-test', '03-push']) {
 
 
 
 			container('docker') {
 				// build stage
-				stage('build') {
+				stage('01-build') {
 
 					sleep 10
 
 					echo 'Notify to GitLab - build stage running'
-					updateGitlabCommitStatus name: 'build', state: 'running'
+					updateGitlabCommitStatus name: '01-build', state: 'running'
 
 					echo '- Build'
 					sleep 10
@@ -39,25 +40,25 @@ podTemplate(label: 'jenkins-slave-pod',
 					echo '+ Build!'
 
 					echo 'Notify to GitLab - build stage success'
-					updateGitlabCommitStatus name: 'build', state: 'success'
+					updateGitlabCommitStatus name: '01-build', state: 'success'
 
 					sh 'touch tmplog; cat tmplog; echo "B" > tmplog'
 				}
 
 				// test stage
-				stage('test') {
+				stage('02-test') {
 
 					docker.image('docker').inside {
 
 						echo 'Notify to GitLab - test stage running'
-						updateGitlabCommitStatus name: 'test', state: 'running'
+						updateGitlabCommitStatus name: '02-test', state: 'running'
 
 						echo '- Test'
 						sleep 10
 						sh 'touch tmplog; cat tmplog; echo "C" > tmplog'
 
 						echo 'Notify to GitLab - test stage success'
-						updateGitlabCommitStatus name: 'test', state: 'success'
+						updateGitlabCommitStatus name: '02-test', state: 'success'
 					}
 					
 					docker.image('docker').inside {
@@ -67,15 +68,15 @@ podTemplate(label: 'jenkins-slave-pod',
 				}
 
 				// pull stage
-				stage('push') {
+				stage('03-push') {
 					echo 'Notify to GitLab - push stage running'
-					updateGitlabCommitStatus name: 'push', state: 'running'
+					updateGitlabCommitStatus name: '03-push', state: 'running'
 
 					echo '- Push'
 					sleep 10
 
 					echo 'Notify to GitLab - push stage success'
-					updateGitlabCommitStatus name: 'push', state: 'success'
+					updateGitlabCommitStatus name: '03-push', state: 'success'
 				}
 			}
 
