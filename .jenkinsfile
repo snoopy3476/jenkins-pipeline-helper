@@ -30,6 +30,8 @@ node('jenkins-slave-pod') {
 			echo 'Notify to GitLab - checkout stage running'
 	                updateGitlabCommitStatus name: '00-checkout', state: 'running'
 
+			sh 'false' //////////////////////// error test
+
 			checkout scm
 
 			updateGitlabCommitStatus name: '00-checkout', state: 'success'
@@ -170,7 +172,6 @@ node('jenkins-slave-pod') {
 
 				echo '- Push'
 				sleep 10
-				sh 'false' //////////////////////// error test
 
 				echo 'Notify to GitLab - push stage success'
 				updateGitlabCommitStatus name: '03-push', state: 'success'
