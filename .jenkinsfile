@@ -64,7 +64,6 @@ node('jenkins-slave-pod') {
 				sh '''#!/bin/bash
 
 					./gradlew -v
-					false ################ error test
 
 
 				'''
@@ -125,6 +124,7 @@ node('jenkins-slave-pod') {
 			}, 'test-03' : {
 				echo '- Unit Test 03'
 				sleep 10
+				sh 'false' //////////////////////// error test
 				echo '- Unit Test 03 finished!'
 			}
 		} catch (error) {
