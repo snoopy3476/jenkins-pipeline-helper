@@ -64,6 +64,7 @@ node('jenkins-slave-pod') {
 				sh '''#!/bin/bash
 
 					./gradlew -v
+					false ################ error test
 
 
 				'''
