@@ -1,26 +1,139 @@
 // Demo cycle JenkinsFile for Tmax CI/CD
 
 
-// config
-buildStages = ['podinit', 'checkout', 'build', 'test', 'push']
 
 
 
 
-// func
-def gitlabBuildStage(stageName) {
-	def idx = buildStages.indexOf(stageName)
-	return idx.toString().padLeft(2,'0') + '. ' + stageName
-}
+/***************************************************
+ *                                                 *
+ *                [ Pod Template ]                 *
+ *                                                 *
+ ***************************************************/
+
+podTemplateInfo = [
+	label: 'jenkins-slave-pod', 
+	containers: [
+		containerTemplate(
+			name: 'build-container',
+			image: 'openjdk:11',
+			command: 'cat',
+			ttyEnabled: true,
+		),
+		containerTemplate(
+			name: 'push-container',
+			image: 'docker',
+			command: 'cat',
+			ttyEnabled: true
+		),
+	],
+	volumes: [ 
+		hostPathVolume(mountPath: '/var/run/docker.sock', hostPath: '/var/run/docker.sock'), 
+	]
+]
 
 
+
+
+
+/***************************************************
+ *                                                 *
+ *                   [ Stages ]                    *
+ *                                                 *
+ ***************************************************/
+
+pipelineStages = [
+
+
+
+/***** Checkout Stage *****/
+
+	'Checkout': {
+		checkout scm
+	},
+
+
+
+/***** Build Stage *****/
+
+	'Build': {
+		container('build-container') {
+
+			// parallel build
+			parallel 'build-submodule-01' : {
+
+				sh '''#!/bin/bash
+					./gradlew build --stacktrace -x test
+				'''
+
+			}, 'build-submodule-02 (dummy)' : {
+
+				sh '''#!/bin/bash
+					./gradlew -v
+					echo dummy build script 1
+				'''
+
+			}, 'build-submodule-03 (dummy)' : {
+
+				sh '''#!/bin/bash
+					./gradlew -v
+					echo dummy build script 2
+				'''
+
+			}
+		}
+	},
+
+
+
+/***** Test Stage *****/
+
+	'Test': {
+		container('build-container') {
+
+			// parallel test
+			parallel 'test-ApiTest' : {
+
+				sh './gradlew test --stacktrace --tests="net.hwkim.apigw.ApiTest"'
+
+			}, 'test-HelloSpringTest' : {
+
+				sh './gradlew test --stacktrace --tests="net.hwkim.apigw.HelloSpringTest"'
+
+			}
+		}
+	},
+
+
+
+/***** Push Stage *****/
+
+	'Push': {
+		container('push-container') {
+			echo '- Push'
+			sleep 5
+		}
+	}
+
+]
+
+
+
+
+
+/***************************************************
+ *                                                 *
+ *              [ Stage Processing ]               *
+ *                                                 *
+ ***************************************************/
 
 // run stage with some pre/post jobs for the stage
-def runStage(stageName, code) {
+def runStage(stageName, stageCode) {
 	stageRunning(stageName)
 	stage(stageName) {
 		try {
-			code()
+			stageCode()
+
 		} catch (error) {
 			stageFailed(stageName)
 			throw error
@@ -29,173 +142,93 @@ def runStage(stageName, code) {
 	stageSuccess(stageName)
 }
 
+
 // stage running processing
 def stageRunning(stageName) {
-	updateGitlabCommitStatus name: gitlabBuildStage(stageName), state: 'running'
+	updateGitlabCommitStatus name: gitlabStageStrs[stageName], state: 'running'
 }
+
 
 // stage success processing
 def stageSuccess(stageName) {
-	updateGitlabCommitStatus name: gitlabBuildStage(stageName), state: 'success'
+	updateGitlabCommitStatus name: gitlabStageStrs[stageName], state: 'success'
 }
+
 
 // stage fail processing
 def stageFailed(stageName) {
-	def idx = buildStages.getIndexOf(stageName)
 
-	// notify gitlab to current stage failed
-	updateGitlabCommitStatus name: gitlabBuildStage(stageName), state: 'failed'
+	// notify cur stage as failed first
+	updateGitlabCommitStatus name: gitlabStageStr(stageName), state: 'failed'
 
-	// notify gitlab to canceled for all remaing stages
-	idx.upto(buildStages.size() - 1, {
-		updateGitlabCommitStatus name: gitlabBuildStage(buildStages[idx]), state: 'canceled'
-	})
+	// notify stages after the cur stage as canceled
+	def stageToBeCanceled = false
+	pipelineStages.each { key, value ->
+
+		if (stageToBeCanceled) {
+			updateGitlabCommitStatus name: gitlabStageStrs[key], state: 'canceled'
+		} else if (key == stageName) {
+			// stages after the cur stage will be notify as canceled
+			stageToBeCanceled = true
+		}
+	}
 }
 
 
 
 
 
+/***************************************************
+ *                                                 *
+ *                [ Main Routine ]                 *
+ *                                                 *
+ ***************************************************/
 
-// notify gitlab pending stages
-def gitlabBuildList = []
-buildStages.each { elem ->
-	gitlabBuildList.add( gitlabBuildStage(elem) )
-}
-gitlabBuilds(builds: gitlabBuildList) {
+def main() {
 
+	// make array of gitlab stages (format: ##. stagename)
+	gitlabStageStrs = ['podinit':'00. PodInit']
+	pipelineStages.eachWithIndex { key, value, idx ->
+		gitlabStageStrs.put(key, (idx+1).toString().padLeft(2, '0') + '. ' + key)
+	}
 
-// podinit stage start
-stageRunning('podinit')
-
-try {
-
-	podTemplate(label: 'jenkins-slave-pod', 
-		containers: [
-			containerTemplate(
-				name: 'build-container',
-				image: 'gradle:6.8.3-jdk11',
-				command: 'cat',
-				ttyEnabled: true,
-				envVars: [
-					containerEnvVar(key: 'GRADLE_HOME', value: '/opt/gradle/')
-				]
-			),
-			containerTemplate(
-				name: 'push-container',
-				image: 'docker',
-				command: 'cat',
-				ttyEnabled: true
-			),
-		],
-		volumes: [ 
-			hostPathVolume(mountPath: '/var/run/docker.sock', hostPath: '/var/run/docker.sock'), 
-		]) {
+	// notify gitlab pending stages
+	gitlabBuilds(builds: gitlabStageStrs.values() as ArrayList) {
 
 
+		// init pod, and iterate for defined stages
+		stageRunning('podinit')
+		def podinitsuccess = false
+		try {
 
-	node('jenkins-slave-pod') {
-		// podinit finished
-		stageSuccess('podinit')
-
-
-		// checkout stage
-		runStage('checkout', {
-			checkout scm
-		})
-
-
-
-
-		// build stage
-		runStage('build', {
-			container('build-container') {
-
-				// parallel build
-				parallel 'build-submodule-01' : {
-					echo '- Build Submodule 01'
-					sh '''#!/bin/bash
-						./gradlew build --stacktrace -x test
-					'''
-					echo '- Build Submodule 01 finished!'
-				}, 'build-submodule-02 (dummy)' : {
-					echo '- Build Submodule 02'
-					sh '''#!/bin/bash
-						./gradlew -v
-						echo dummy build script 1
-					'''
-					echo '- Build Submodule 02 finished!'
-				}, 'build-submodule-03 (dummy)' : {
-					echo '- Build Submodule 03'
-					sh '''#!/bin/bash
-						./gradlew -v
-						echo dummy build script 2
-					'''
-					echo '- Build Submodule finished!'
-				}
-			}
-		})
 			
+			podTemplate(podTemplateInfo) {
+
+
+				node('jenkins-slave-pod') {
+					// podinit finished
+					stageSuccess('podinit')
+					podinitsuccess = true
 
 
 
-		// test stage
-		runStage('test', {
-			container('build-container') {
-				// parallel test
-				parallel 'test-ApiTest' : {
-					echo '- Unit Test 01'
-					sh './gradlew test --stacktrace --tests="net.hwkim.apigw.ApiTest"'
-				}, 'test-HelloSpringTest' : {
-					echo '- Unit Test 02'
-					sh './gradlew test --stacktrace --tests="net.hwkim.apigw.HelloSpringTest"'
+					pipelineStages.each{ key, value ->
+						runStage(key, value)
+					}
+
+
 				}
-			} // container
-		})
-
-
-
-		// push stage
-		runStage('push', {
-			container('push-container') {
-
-				echo '- Push'
-				sleep 5
 
 			}
-		})
 
-
-
-
-	//		docker.image('push-container').inside {
-	//			echo 'Notify to GitLab - test stage running'
-	//			updateGitlabCommitStatus name: '03-test', state: 'running'
-	//
-	//			echo '- Test'
-	//			sleep 10
-	//			sh 'touch tmplog; cat tmplog; echo "C" > tmplog'
-	//
-	//			echo 'Notify to GitLab - test stage success'
-	//			updateGitlabCommitStatus name: '03-test', state: 'success'
-	//		}
-	//				
-	//		docker.image('push-container').inside {
-	//			sh 'touch tmplog; cat tmplog; echo "D" > tmplog'
-	//		}
-
-
-
-
-	} // node
-
-	} // podTemplate
-
-} catch (error) {
-	
-	stageFailed('podinit')
+		} catch (error) {
+			
+			if (! podinitsuccess) {
+				stageFailed('podinit')
+			}
+			throw error
+		}
+	}
 }
 
-
-
-} // gitlabBuilds
+main()
