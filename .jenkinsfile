@@ -1,217 +1,201 @@
 // Demo cycle JenkinsFile for Tmax CI/CD
 
-podTemplate(label: 'jenkins-slave-pod', 
-	containers: [
-		containerTemplate(
-			name: 'push-container',
-			image: 'docker',
-			command: 'cat',
-			ttyEnabled: true
-		),
-		containerTemplate(
-			name: 'build-container',
-			image: 'openjdk:11',
-			command: 'cat',
-			ttyEnabled: true
-		),
-	],
-	volumes: [ 
-		hostPathVolume(mountPath: '/var/run/docker.sock', hostPath: '/var/run/docker.sock'), 
-	]) {
 
-
-
-node('jenkins-slave-pod') {
-	// notify pending stages
-	gitlabBuilds(builds: ['00-checkout', '01-prepare', '02-build', '03-test', '04-push']) {
+// config
+buildStages = ['podinit', 'checkout', 'build', 'test', 'push']
 
 
 
 
-	// checkout stage
-	stage('checkout') {
+// func
+def gitlabBuildStage(stageName) {
+	def idx = buildStages.indexOf(stageName)
+	return idx.toString().padLeft(2,'0') + '. ' + stageName
+}
+
+
+
+// run stage with some pre/post jobs for the stage
+def runStage(stageName, code) {
+	stageRunning(stageName)
+	stage(stageName) {
 		try {
-			echo 'Notify to GitLab - checkout stage running'
-	                updateGitlabCommitStatus name: '00-checkout', state: 'running'
-
-			checkout scm
-
-			updateGitlabCommitStatus name: '00-checkout', state: 'success'
-
+			code()
 		} catch (error) {
-
-			updateGitlabCommitStatus name: '00-checkout', state: 'failed'
-			updateGitlabCommitStatus name: '01-prepare', state: 'canceled'
-			updateGitlabCommitStatus name: '02-build', state: 'canceled'
-			updateGitlabCommitStatus name: '03-test', state: 'canceled'
-			updateGitlabCommitStatus name: '04-push', state: 'canceled'
+			stageFailed(stageName)
 			throw error
-
 		}			
 	}
+	stageSuccess(stageName)
+}
+
+// stage running processing
+def stageRunning(stageName) {
+	updateGitlabCommitStatus name: gitlabBuildStage(stageName), state: 'running'
+}
+
+// stage success processing
+def stageSuccess(stageName) {
+	updateGitlabCommitStatus name: gitlabBuildStage(stageName), state: 'success'
+}
+
+// stage fail processing
+def stageFailed(stageName) {
+	def idx = buildStages.getIndexOf(stageName)
+
+	// notify gitlab to current stage failed
+	updateGitlabCommitStatus name: gitlabBuildStage(stageName), state: 'failed'
+
+	// notify gitlab to canceled for all remaing stages
+	idx.upto(buildStages.size() - 1, {
+		updateGitlabCommitStatus name: gitlabBuildStage(buildStages[idx]), state: 'canceled'
+	})
+}
 
 
 
 
-	// prepare stage
-	stage('prepare') {
-		try {
-                        echo 'Notify to GitLab - checkout stage running'
-                        updateGitlabCommitStatus name: '01-prepare', state: 'running'
 
+
+// notify gitlab pending stages
+def gitlabBuildList = []
+buildStages.each { elem ->
+	gitlabBuildList.add( gitlabBuildStage(elem) )
+}
+gitlabBuilds(builds: gitlabBuildList) {
+
+
+// podinit stage start
+stageRunning('podinit')
+
+try {
+
+	podTemplate(label: 'jenkins-slave-pod', 
+		containers: [
+			containerTemplate(
+				name: 'build-container',
+				image: 'gradle:6.8.3-jdk11',
+				command: 'cat',
+				ttyEnabled: true,
+				envVars: [
+					containerEnvVar(key: 'GRADLE_HOME', value: '/opt/gradle/')
+				]
+			),
+			containerTemplate(
+				name: 'push-container',
+				image: 'docker',
+				command: 'cat',
+				ttyEnabled: true
+			),
+		],
+		volumes: [ 
+			hostPathVolume(mountPath: '/var/run/docker.sock', hostPath: '/var/run/docker.sock'), 
+		]) {
+
+
+
+	node('jenkins-slave-pod') {
+		// podinit finished
+		stageSuccess('podinit')
+
+
+		// checkout stage
+		runStage('checkout', {
+			checkout scm
+		})
+
+
+
+
+		// build stage
+		runStage('build', {
 			container('build-container') {
 
-			// prepare gradle
-			sh './gradlew --refresh-dependencies'
-
-			} // container
-
-                        updateGitlabCommitStatus name: '01-prepare', state: 'success'
-
-                } catch (error) {
-
-                        updateGitlabCommitStatus name: '01-prepare', state: 'failed'
-                        updateGitlabCommitStatus name: '02-build', state: 'canceled'
-                        updateGitlabCommitStatus name: '03-test', state: 'canceled'
-                        updateGitlabCommitStatus name: '04-push', state: 'canceled'
-                        throw error
-
-                }
-	}
-
-
-
-
-
-	// build stage
-	stage('build') {
-
-		echo 'Notify to GitLab - build stage running'
-		updateGitlabCommitStatus name: '02-build', state: 'running'
-
-		try {
-
-			container('build-container') {
-
-			// parallel build
-			parallel 'build-submodule-01' : {
-				echo '- Build Submodule 01'
-				sh '''#!/bin/bash
-					./gradlew build --stacktrace -x test
-				'''
-				echo '- Build Submodule 01 finished!'
-			}, 'build-submodule-02 (dummy)' : {
-				echo '- Build Submodule 02'
-				sh '''#!/bin/bash
-					./gradlew -v
-					echo dummy build script 1
-				'''
-				echo '- Build Submodule 02 finished!'
-			}, 'build-submodule-03 (dummy)' : {
-				echo '- Build Submodule 03'
-				sh '''#!/bin/bash
-					./gradlew -v
-					echo dummy build script 2
-				'''
-				echo '- Build Submodule finished!'
+				// parallel build
+				parallel 'build-submodule-01' : {
+					echo '- Build Submodule 01'
+					sh '''#!/bin/bash
+						./gradlew build --stacktrace -x test
+					'''
+					echo '- Build Submodule 01 finished!'
+				}, 'build-submodule-02 (dummy)' : {
+					echo '- Build Submodule 02'
+					sh '''#!/bin/bash
+						./gradlew -v
+						echo dummy build script 1
+					'''
+					echo '- Build Submodule 02 finished!'
+				}, 'build-submodule-03 (dummy)' : {
+					echo '- Build Submodule 03'
+					sh '''#!/bin/bash
+						./gradlew -v
+						echo dummy build script 2
+					'''
+					echo '- Build Submodule finished!'
+				}
 			}
-			} // container
-
-		} catch (error) {
-			updateGitlabCommitStatus name: '02-build', state: 'failed'
-			updateGitlabCommitStatus name: '03-test', state: 'canceled'
-			updateGitlabCommitStatus name: '04-push', state: 'canceled'
-			throw error
-		}
-		echo 'Notify to GitLab - build stage success'
-		updateGitlabCommitStatus name: '02-build', state: 'success'
-
-	}
+		})
+			
 
 
 
-
-
-	// test stage
-	stage('test') {
-
-		echo 'Notify to GitLab - test stage running'
-		updateGitlabCommitStatus name: '03-test', state: 'running'
-
-		try {
-
+		// test stage
+		runStage('test', {
 			container('build-container') {
-			// parallel test
-			parallel 'test-ApiTest' : {
-				echo '- Unit Test 01'
-				sh './gradlew test --stacktrace --tests="net.hwkim.apigw.ApiTest"'
-			}, 'test-HelloSpringTest' : {
-				echo '- Unit Test 02'
-				sh './gradlew test --stacktrace --tests="net.hwkim.apigw.HelloSpringTest"'
-			}
+				// parallel test
+				parallel 'test-ApiTest' : {
+					echo '- Unit Test 01'
+					sh './gradlew test --stacktrace --tests="net.hwkim.apigw.ApiTest"'
+				}, 'test-HelloSpringTest' : {
+					echo '- Unit Test 02'
+					sh './gradlew test --stacktrace --tests="net.hwkim.apigw.HelloSpringTest"'
+				}
 			} // container
-
-		} catch (error) {
-			updateGitlabCommitStatus name: '03-test', state: 'failed'
-			updateGitlabCommitStatus name: '04-push', state: 'canceled'
-			throw error
-		}
-
-
-		echo 'Notify to GitLab - test stage success'
-		updateGitlabCommitStatus name: '03-test', state: 'success'
-
-
-//		docker.image('push-container').inside {
-//			echo 'Notify to GitLab - test stage running'
-//			updateGitlabCommitStatus name: '03-test', state: 'running'
-//
-//			echo '- Test'
-//			sleep 10
-//			sh 'touch tmplog; cat tmplog; echo "C" > tmplog'
-//
-//			echo 'Notify to GitLab - test stage success'
-//			updateGitlabCommitStatus name: '03-test', state: 'success'
-//		}
-//				
-//		docker.image('push-container').inside {
-//			sh 'touch tmplog; cat tmplog; echo "D" > tmplog'
-//		}
-
-
-	}
+		})
 
 
 
-
-	// pull stage
-	stage('push') {
-		try {
+		// push stage
+		runStage('push', {
 			container('push-container') {
-
-				echo 'Notify to GitLab - push stage running'
-				updateGitlabCommitStatus name: '04-push', state: 'running'
 
 				echo '- Push'
 				sleep 5
 
-				echo 'Notify to GitLab - push stage success'
-				updateGitlabCommitStatus name: '04-push', state: 'success'
 			}
-		} catch (error) {
-			updateGitlabCommitStatus name: '04-push', state: 'failed'
-			throw error
-		}
-		
-	}
+		})
 
 
 
 
+	//		docker.image('push-container').inside {
+	//			echo 'Notify to GitLab - test stage running'
+	//			updateGitlabCommitStatus name: '03-test', state: 'running'
+	//
+	//			echo '- Test'
+	//			sleep 10
+	//			sh 'touch tmplog; cat tmplog; echo "C" > tmplog'
+	//
+	//			echo 'Notify to GitLab - test stage success'
+	//			updateGitlabCommitStatus name: '03-test', state: 'success'
+	//		}
+	//				
+	//		docker.image('push-container').inside {
+	//			sh 'touch tmplog; cat tmplog; echo "D" > tmplog'
+	//		}
 
 
-	} // gitlabBuilds
 
-} // node
 
-} // podTemplate
+	} // node
+
+	} // podTemplate
+
+} catch (error) {
+	
+	stageFailed('podinit')
+}
+
+
+
+} // gitlabBuilds
