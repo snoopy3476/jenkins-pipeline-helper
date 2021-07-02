@@ -1,7 +1,6 @@
 // Demo cycle JenkinsFile for Tmax CI/CD
 
 podTemplate(label: 'jenkins-slave-pod', 
-	image: 'jenkins/jnlp-agent-docker',
 	containers: [
 		containerTemplate(
 			name: 'push-container',
@@ -145,10 +144,10 @@ node('jenkins-slave-pod') {
 			// parallel test
 			parallel 'test-ApiTest' : {
 				echo '- Unit Test 01'
-				sh './gradlew test --stacktrace --tests="net.hwkim.apigw.ApiTest.*"'
+				sh './gradlew test --stacktrace --tests="net.hwkim.apigw.ApiTest"'
 			}, 'test-HelloSpringTest' : {
 				echo '- Unit Test 02'
-				sh './gradlew test --stacktrace --tests="net.hwkim.apigw.HelloSpringTest.*"'
+				sh './gradlew test --stacktrace --tests="net.hwkim.apigw.HelloSpringTest"'
 			}
 			} // container
 
@@ -181,7 +180,6 @@ node('jenkins-slave-pod') {
 
 
 	}
-
 
 
 
