@@ -1,4 +1,4 @@
-// Demo cycle JenkinsFile for Tmax CI/CD
+// Demo cycle JenkinsFile for Tmax HE CI/CD
 
 
 
