@@ -1,4 +1,4 @@
-// Demo cycle JenkinsFile for Tmax HE CI/CD
+// Demo Spring + Gradle cycle JenkinsFile for Tmax HE CI/CD
 
 
 
@@ -129,34 +129,43 @@ pipelineStages = [
 
 // run stage with some pre/post jobs for the stage
 def runStage(stageName, stageCode) {
-	stageRunning(stageName)
+
+	onStageRunning(stageName)
+
 	stage(stageName) {
 		try {
 			stageCode()
 
 		} catch (error) {
-			stageFailed(stageName)
+			onStageFailure(stageName)
 			throw error
 		}			
 	}
-	stageSuccess(stageName)
+
+	onStageSuccess(stageName)
 }
 
 
-// stage running processing
-def stageRunning(stageName) {
+// run when a stage starts to run
+def onStageRunning(stageName) {
+
+	// notify gitlab //
 	updateGitlabCommitStatus name: gitlabStageStrs[stageName], state: 'running'
 }
 
 
-// stage success processing
-def stageSuccess(stageName) {
+// run when a stage succeeded
+def onStageSuccess(stageName) {
+
+	// notify gitlab //
 	updateGitlabCommitStatus name: gitlabStageStrs[stageName], state: 'success'
 }
 
 
-// stage fail processing
-def stageFailed(stageName) {
+// run when a stage failed
+def onStageFailure(stageName) {
+
+	// notify gitlab //
 
 	// notify cur stage as failed first
 	updateGitlabCommitStatus name: gitlabStageStr(stageName), state: 'failed'
@@ -197,7 +206,7 @@ def main() {
 
 
 		// init pod, and iterate for defined stages
-		stageRunning('podinit')
+		onStageRunning('podinit')
 		def podinitsuccess = false
 		try {
 
@@ -207,7 +216,7 @@ def main() {
 
 				node('jenkins-slave-pod') {
 					// podinit finished
-					stageSuccess('podinit')
+					onStageSuccess('podinit')
 					podinitsuccess = true
 
 
@@ -224,11 +233,13 @@ def main() {
 		} catch (error) {
 			
 			if (! podinitsuccess) {
-				stageFailed('podinit')
+				onStageFailure('podinit')
 			}
 			throw error
 		}
 	}
 }
 
+
+// exec main()
 main()
