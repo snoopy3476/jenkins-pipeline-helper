@@ -1,5 +1,12 @@
-// Demo Spring + Gradle cycle JenkinsFile for Tmax HE CI/CD
+/***** Demo Spring + Gradle cycle JenkinsFile for Tmax HE CI/CD *****/
 
+/***************************************************
+ *                                                 *
+ *                   [ Config ]                    *
+ *                                                 *
+ ***************************************************/
+
+gradleHomePath = '/home/jenkins/.gradle'
 
 
 
@@ -27,9 +34,18 @@ podTemplateInfo = [
 			ttyEnabled: true
 		),
 	],
+	envVars: [
+		// gradle home to store dependencies
+		envVar(key: 'GRADLE_HOME', value: gradleHomePath),
+	],
 	volumes: [ 
-		hostPathVolume(mountPath: '/var/run/docker.sock', hostPath: '/var/run/docker.sock'), 
-	]
+		// for docker
+		hostPathVolume(mountPath: '/var/run/docker.sock',
+				hostPath: '/var/run/docker.sock'), 
+		// gradle home caching: mount local host path to 'gradleHomePath'
+		hostPathVolume(mountPath: gradleHomePath,
+				hostPath: '/tmp/jenkins/.gradle'),
+	],
 ]
 
 
@@ -63,20 +79,20 @@ pipelineStages = [
 			parallel 'build-submodule-01' : {
 
 				sh '''#!/bin/bash
-					./gradlew build --stacktrace -x test
+					./gradlew -g "$GRADLE_HOME" clean build --stacktrace -x test
 				'''
 
 			}, 'build-submodule-02 (dummy)' : {
 
 				sh '''#!/bin/bash
-					./gradlew -v
+					./gradlew -g "$GRADLE_HOME" -v
 					echo dummy build script 1
 				'''
 
 			}, 'build-submodule-03 (dummy)' : {
 
 				sh '''#!/bin/bash
-					./gradlew -v
+					./gradlew -g "$GRADLE_HOME" -v
 					echo dummy build script 2
 				'''
 
@@ -94,11 +110,11 @@ pipelineStages = [
 			// parallel test
 			parallel 'test-ApiTest' : {
 
-				sh './gradlew test --stacktrace --tests="net.hwkim.apigw.ApiTest"'
+				sh './gradlew -g "$GRADLE_HOME" test --stacktrace --tests="net.hwkim.apigw.ApiTest"'
 
 			}, 'test-HelloSpringTest' : {
 
-				sh './gradlew test --stacktrace --tests="net.hwkim.apigw.HelloSpringTest"'
+				sh './gradlew -g "$GRADLE_HOME" test --stacktrace --tests="net.hwkim.apigw.HelloSpringTest"'
 
 			}
 		}
@@ -168,7 +184,7 @@ def onStageFailure(stageName) {
 	// notify gitlab //
 
 	// notify cur stage as failed first
-	updateGitlabCommitStatus name: gitlabStageStr(stageName), state: 'failed'
+	updateGitlabCommitStatus name: gitlabStageStrs[stageName], state: 'failed'
 
 	// notify stages after the cur stage as canceled
 	def stageToBeCanceled = false
