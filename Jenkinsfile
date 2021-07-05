@@ -75,28 +75,35 @@ pipelineStages = [
 	'Build': {
 		container('build-container') {
 
-			// parallel build
-			parallel 'build-submodule-01' : {
+			try {
+				// parallel build
+				parallel 'build-submodule-01' : {
 
-				sh '''#!/bin/bash
-					./gradlew -g "$GRADLE_HOME" clean build --stacktrace -x test
-				'''
+					sh '''#!/bin/bash
+						./gradlew -g "$GRADLE_HOME" clean build --stacktrace -x test
+					'''
 
-			}, 'build-submodule-02 (dummy)' : {
+				}, 'build-submodule-02 (dummy)' : {
 
-				sh '''#!/bin/bash
-					./gradlew -g "$GRADLE_HOME" -v
-					echo dummy build script 1
-				'''
+					sh '''#!/bin/bash
+						./gradlew -g "$GRADLE_HOME" -v
+						echo dummy build script 1
+					'''
 
-			}, 'build-submodule-03 (dummy)' : {
+				}, 'build-submodule-03 (dummy)' : {
 
-				sh '''#!/bin/bash
-					./gradlew -g "$GRADLE_HOME" -v
-					echo dummy build script 2
-				'''
+					sh '''#!/bin/bash
+						./gradlew -g "$GRADLE_HOME" -v
+						echo dummy build script 2
+					'''
 
+				}
+			} catch (error) {
+				throw error
+			} finally {
+				archiveArtifacts artifacts: 'build/libs/**/*.jar, build/libs/**/*.war', fingerprint: true
 			}
+
 		}
 	},
 
@@ -107,16 +114,24 @@ pipelineStages = [
 	'Test': {
 		container('build-container') {
 
-			// parallel test
-			parallel 'test-ApiTest' : {
-
-				sh './gradlew -g "$GRADLE_HOME" test --stacktrace --tests="net.hwkim.apigw.ApiTest"'
-
-			}, 'test-HelloSpringTest' : {
-
-				sh './gradlew -g "$GRADLE_HOME" test --stacktrace --tests="net.hwkim.apigw.HelloSpringTest"'
-
+			try {
+				sh './gradlew -g "$GRADLE_HOME" test --stacktrace --parallel'
+			} catch (error) {
+				throw error
+			} finally {
+				junit 'build/test-results/**/*.xml'
 			}
+
+//			// parallel test
+//			parallel 'test-ApiTest' : {
+//
+//				sh './gradlew -g "$GRADLE_HOME" test --stacktrace --tests="net.hwkim.apigw.ApiTest"'
+//
+//			}, 'test-HelloSpringTest' : {
+//
+//				sh './gradlew -g "$GRADLE_HOME" test --stacktrace --tests="net.hwkim.apigw.HelloSpringTest"'
+//
+//			}
 		}
 	},
 
