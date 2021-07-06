@@ -21,13 +21,13 @@ gradleHomePath = '/home/jenkins/.gradle'
 podTemplateInfo = [
 	label: 'jenkins-slave-pod', 
 	containers: [
-		containerTemplate(
+		containerTemplate (
 			name: 'build-container',
 			image: 'openjdk:11',
 			command: 'cat',
 			ttyEnabled: true,
 		),
-		containerTemplate(
+		containerTemplate (
 			name: 'push-container',
 			image: 'docker',
 			command: 'cat',
@@ -36,14 +36,14 @@ podTemplateInfo = [
 	],
 	envVars: [
 		// gradle home to store dependencies
-		envVar(key: 'GRADLE_HOME', value: gradleHomePath),
+		envVar (key: 'GRADLE_HOME', value: gradleHomePath),
 	],
 	volumes: [ 
 		// for docker
-		hostPathVolume(mountPath: '/var/run/docker.sock',
+		hostPathVolume (mountPath: '/var/run/docker.sock',
 				hostPath: '/var/run/docker.sock'), 
 		// gradle home caching: mount local host path to 'gradleHomePath'
-		hostPathVolume(mountPath: gradleHomePath,
+		hostPathVolume (mountPath: gradleHomePath,
 				hostPath: '/tmp/jenkins/.gradle'),
 	],
 ]
@@ -65,7 +65,7 @@ pipelineStages = [
 /***** Checkout Stage *****/
 
 	'Checkout': {
-		checkout scm
+		checkout (scm)
 	},
 
 
@@ -73,36 +73,54 @@ pipelineStages = [
 /***** Build Stage *****/
 
 	'Build': {
-		container('build-container') {
+		try {
 
-			try {
+			container ('build-container') {
+
 				// parallel build
-				parallel 'build-submodule-01' : {
+				parallel ('[0] Actial gradle build': {
 
-					sh '''#!/bin/bash
-						./gradlew -g "$GRADLE_HOME" clean build --stacktrace -x test
-					'''
+					sh (
+						label: 'Gradle Build',
+						script: '''#!/bin/bash
+							./gradlew -g "$GRADLE_HOME" clean build --stacktrace -x test
+							'''
+					)
 
-				}, 'build-submodule-02 (dummy)' : {
+				}, '[1] Dummy for submodule': {
 
-					sh '''#!/bin/bash
-						./gradlew -g "$GRADLE_HOME" -v
-						echo dummy build script 1
-					'''
+					sh (
+						label: 'Dummy Submodule Build',
+						script: '''#!/bin/bash
+							./gradlew -g "$GRADLE_HOME" -v
+							echo dummy build script 1
+						'''
+					)
 
-				}, 'build-submodule-03 (dummy)' : {
+				}, '[2] Dummy for submodule': {
 
-					sh '''#!/bin/bash
-						./gradlew -g "$GRADLE_HOME" -v
-						echo dummy build script 2
-					'''
+					sh (
+						label: 'Dummy Submodule Build',
+						script: '''#!/bin/bash
+							./gradlew -g "$GRADLE_HOME" -v
+							echo dummy build script 2
+							'''
+					)
 
-				}
-			} catch (error) {
-				throw error
-			} finally {
-				archiveArtifacts artifacts: 'build/libs/**/*.jar, build/libs/**/*.war', fingerprint: true
+				})
+
 			}
+
+		} catch (error) {
+			throw (error)
+		} finally {
+
+			// archive built results
+			archiveArtifacts (
+				label: 'Archiving Artifacts',
+				artifacts: 'build/libs/**/*.jar, build/libs/**/*.war',
+				fingerprint: true
+			)
 
 		}
 	},
@@ -112,27 +130,64 @@ pipelineStages = [
 /***** Test Stage *****/
 
 	'Test': {
-		container('build-container') {
+		try {
 
-			try {
-				sh './gradlew -g "$GRADLE_HOME" test --stacktrace --parallel'
-			} catch (error) {
-				throw error
-			} finally {
-				junit 'build/test-results/**/*.xml'
+			container ('build-container') {
+				sh (
+					label: 'Gradle Parallel Test',
+					script: './gradlew -g "$GRADLE_HOME" test --parallel'
+				)
 			}
 
-//			// parallel test
-//			parallel 'test-ApiTest' : {
-//
-//				sh './gradlew -g "$GRADLE_HOME" test --stacktrace --tests="net.hwkim.apigw.ApiTest"'
-//
-//			}, 'test-HelloSpringTest' : {
-//
-//				sh './gradlew -g "$GRADLE_HOME" test --stacktrace --tests="net.hwkim.apigw.HelloSpringTest"'
-//
-//			}
+		} catch (error) {
+			throw (error)
+		} finally {
+
+			// list of xml file list
+			junitXmlList =
+				sh (
+					label: 'Getting Junit Xml List',
+					returnStdout: true,
+					script: '''
+							[ -d "build/test-results" ] \\
+							&& find "build/test-results" -name "*.xml" \\
+							|| true
+						'''
+				) .readLines () .sort ()
+
+			// list of parallel jobs
+			junitParallelSteps = [:]
+			junitXmlList. eachWithIndex { path, idx ->
+
+				// get file basename
+				def posFrom = path .lastIndexOf ('/') + 1 // if -1 (no occurence), then set to 0
+				def posTo = path .lastIndexOf ('.')
+				def basename = path .substring (posFrom, posTo)
+
+				junitParallelSteps << [('[' + idx .toString () + '] ' + basename): {
+
+					def summary = junit (path)
+
+					if (summary .failCount == 0) {
+						echo ('Test summary of \'' + basename + '\': '
+							+ '[ Total ' + summary .totalCount
+							+ ', Passed ' + summary .passCount
+							+ ', Failed ' + summary .failCount
+							+ ', Skipped ' + summary .skipCount + ' ]')
+					} else {
+						throw (new Exception ('Test failed: \'' + path + '\'') )
+					}
+
+				}]
+			}
+
+			// execute parallel junit jobs
+			if (junitParallelSteps .size () > 0) {
+				parallel (junitParallelSteps)
+			}
+
 		}
+
 	},
 
 
@@ -140,13 +195,14 @@ pipelineStages = [
 /***** Push Stage *****/
 
 	'Push': {
-		container('push-container') {
-			echo '- Push'
-			sleep 5
+		container ('push-container') {
+			echo ('- Push')
+			sleep (5)
 		}
 	}
 
 ]
+
 
 
 
@@ -159,54 +215,56 @@ pipelineStages = [
  ***************************************************/
 
 // run stage with some pre/post jobs for the stage
-def runStage(stageName, stageCode) {
+def runStage (stageName, stageCode) {
 
-	onStageRunning(stageName)
+	onStageRunning (stageName)
 
-	stage(stageName) {
+	stage (stageName) {
 		try {
-			stageCode()
+			stageCode ()
 
 		} catch (error) {
-			onStageFailure(stageName)
-			throw error
-		}			
+			onStageFailure (stageName)
+			throw (error)
+//		} finally {
+
+		}
 	}
 
-	onStageSuccess(stageName)
+	onStageSuccess (stageName)
 }
 
 
 // run when a stage starts to run
-def onStageRunning(stageName) {
+def onStageRunning (stageName) {
 
 	// notify gitlab //
-	updateGitlabCommitStatus name: gitlabStageStrs[stageName], state: 'running'
+	updateGitlabCommitStatus (name: gitlabStageStrs[stageName], state: 'running')
 }
 
 
 // run when a stage succeeded
-def onStageSuccess(stageName) {
+def onStageSuccess (stageName) {
 
 	// notify gitlab //
-	updateGitlabCommitStatus name: gitlabStageStrs[stageName], state: 'success'
+	updateGitlabCommitStatus (name: gitlabStageStrs[stageName], state: 'success')
 }
 
 
 // run when a stage failed
-def onStageFailure(stageName) {
+def onStageFailure (stageName) {
 
 	// notify gitlab //
 
 	// notify cur stage as failed first
-	updateGitlabCommitStatus name: gitlabStageStrs[stageName], state: 'failed'
+	updateGitlabCommitStatus (name: gitlabStageStrs[stageName], state: 'failed')
 
 	// notify stages after the cur stage as canceled
 	def stageToBeCanceled = false
-	pipelineStages.each { key, value ->
+	pipelineStages .each { key, value ->
 
 		if (stageToBeCanceled) {
-			updateGitlabCommitStatus name: gitlabStageStrs[key], state: 'canceled'
+			updateGitlabCommitStatus (name: gitlabStageStrs[key], state: 'canceled')
 		} else if (key == stageName) {
 			// stages after the cur stage will be notify as canceled
 			stageToBeCanceled = true
@@ -224,36 +282,36 @@ def onStageFailure(stageName) {
  *                                                 *
  ***************************************************/
 
-def main() {
+def main () {
 
 	// make array of gitlab stages (format: ##. stagename)
-	gitlabStageStrs = ['podinit':'00. PodInit']
-	pipelineStages.eachWithIndex { key, value, idx ->
-		gitlabStageStrs.put(key, (idx+1).toString().padLeft(2, '0') + '. ' + key)
+	def stageLen = pipelineStages .size () + 1
+	def padCount = stageLen .toString () .length ()
+	gitlabStageStrs = ['podinit': '0' .padLeft (padCount, '0') + '. PodInit']
+	pipelineStages .eachWithIndex { key, value, idx ->
+		gitlabStageStrs .put (key, (idx+1) .toString () .padLeft (padCount, '0') + '. ' + key)
 	}
 
 	// notify gitlab pending stages
-	gitlabBuilds(builds: gitlabStageStrs.values() as ArrayList) {
+	gitlabBuilds (builds: gitlabStageStrs .values () as ArrayList) {
 
 
 		// init pod, and iterate for defined stages
-		onStageRunning('podinit')
+		onStageRunning ('podinit')
 		def podinitsuccess = false
 		try {
 
 			
-			podTemplate(podTemplateInfo) {
+			podTemplate (podTemplateInfo) {
 
 
-				node('jenkins-slave-pod') {
+				node ('jenkins-slave-pod') {
 					// podinit finished
-					onStageSuccess('podinit')
+					onStageSuccess ('podinit')
 					podinitsuccess = true
 
-
-
-					pipelineStages.each{ key, value ->
-						runStage(key, value)
+					pipelineStages .each{ key, value ->
+						runStage (key, value)
 					}
 
 
@@ -264,13 +322,13 @@ def main() {
 		} catch (error) {
 			
 			if (! podinitsuccess) {
-				onStageFailure('podinit')
+				onStageFailure ('podinit')
 			}
-			throw error
+			throw (error)
 		}
 	}
 }
 
 
-// exec main()
-main()
+// exec main ()
+main ()
