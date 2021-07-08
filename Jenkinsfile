@@ -226,8 +226,6 @@ def runStage (stageName, stageCode) {
 		} catch (error) {
 			onStageFailure (stageName)
 			throw (error)
-//		} finally {
-
 		}
 	}
 
@@ -239,7 +237,8 @@ def runStage (stageName, stageCode) {
 def onStageRunning (stageName) {
 
 	// notify gitlab //
-	updateGitlabCommitStatus (name: gitlabStageStrs[stageName], state: 'running')
+	callIfExist ('updateGitlabCommitStatus',
+		[name: gitlabStageStrs[stageName], state: 'running'])
 }
 
 
@@ -247,7 +246,8 @@ def onStageRunning (stageName) {
 def onStageSuccess (stageName) {
 
 	// notify gitlab //
-	updateGitlabCommitStatus (name: gitlabStageStrs[stageName], state: 'success')
+	callIfExist ('updateGitlabCommitStatus',
+		[name: gitlabStageStrs[stageName], state: 'success'])
 }
 
 
@@ -257,18 +257,43 @@ def onStageFailure (stageName) {
 	// notify gitlab //
 
 	// notify cur stage as failed first
-	updateGitlabCommitStatus (name: gitlabStageStrs[stageName], state: 'failed')
+	callIfExist ('updateGitlabCommitStatus',
+		[name: gitlabStageStrs[stageName], state: 'failed'])
 
 	// notify stages after the cur stage as canceled
 	def stageToBeCanceled = false
 	pipelineStages .each { key, value ->
 
 		if (stageToBeCanceled) {
-			updateGitlabCommitStatus (name: gitlabStageStrs[key], state: 'canceled')
+			callIfExist ('updateGitlabCommitStatus',
+				[name: gitlabStageStrs[key], state: 'canceled'])
 		} else if (key == stageName) {
 			// stages after the cur stage will be notify as canceled
 			stageToBeCanceled = true
 		}
+	}
+}
+
+
+
+
+
+/***************************************************
+ *                                                 *
+ *             [ Plugin Method Check ]             *
+ *                                                 *
+ ***************************************************/
+
+def callIfExist (func, args, bodyCode=null) {
+	try {
+		if (bodyCode == null) {
+			return ("$func" (args))
+		} else {
+			return ("$func" (args) { bodyCode () })
+		}
+	} catch (NoSuchMethodError error) {
+		echo ('callIfExist: Method \'' + func + '\' not found, skip running')
+		return (false)
 	}
 }
 
@@ -293,39 +318,40 @@ def main () {
 	}
 
 	// notify gitlab pending stages
-	gitlabBuilds (builds: gitlabStageStrs .values () as ArrayList) {
+	callIfExist ('gitlabBuilds',
+		[builds: gitlabStageStrs .values () as ArrayList],
+		{} )
 
 
-		// init pod, and iterate for defined stages
-		onStageRunning ('podinit')
-		def podinitsuccess = false
-		try {
+	// init pod, and iterate for defined stages
+	onStageRunning ('podinit')
+	def podinitsuccess = false
+	try {
 
-			
-			podTemplate (podTemplateInfo) {
-
-
-				node ('jenkins-slave-pod') {
-					// podinit finished
-					onStageSuccess ('podinit')
-					podinitsuccess = true
-
-					pipelineStages .each{ key, value ->
-						runStage (key, value)
-					}
+		
+		podTemplate (podTemplateInfo) {
 
 
+			node ('jenkins-slave-pod') {
+				// podinit finished
+				onStageSuccess ('podinit')
+				podinitsuccess = true
+
+				pipelineStages .each{ key, value ->
+					runStage (key, value)
 				}
 
+
 			}
 
-		} catch (error) {
-			
-			if (! podinitsuccess) {
-				onStageFailure ('podinit')
-			}
-			throw (error)
 		}
+
+	} catch (error) {
+		
+		if (! podinitsuccess) {
+			onStageFailure ('podinit')
+		}
+		throw (error)
 	}
 }
 
