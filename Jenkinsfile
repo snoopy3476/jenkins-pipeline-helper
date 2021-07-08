@@ -1,4 +1,6 @@
 /***** Demo Spring + Gradle cycle JenkinsFile for Tmax HE CI/CD *****/
+// Required plugins (Need for the script): Kubernetes, Docker
+// Recommended plugins (Used in the script, but not required): GitLab
 
 /***************************************************
  *                                                 *
@@ -171,7 +173,7 @@ pipelineStages = [
 					{
 						def res = junit (path)
 						if (res .failCount == 0) {
-							echo ('Test res of \'' + basename + '\': '
+							echo ('Test results of \'' + basename + '\': '
 								+ '[ Total ' + res .totalCount
 								+ ', Passed ' + res .passCount
 								+ ', Failed ' + res .failCount
@@ -241,7 +243,7 @@ def runStage (stageName, stageCode) {
 // run when a stage starts to run
 def onStageRunning (stageName) {
 
-	// notify gitlab //
+	// notify gitlab
 	if (gitlabStagesRemaining[stageName] != null) {
 		callIfExist ('updateGitlabCommitStatus',
 			[name: gitlabStagesRemaining[stageName], state: 'running'])
@@ -252,7 +254,7 @@ def onStageRunning (stageName) {
 // run when a stage succeeded
 def onStageSuccess (stageName) {
 
-	// notify gitlab //
+	// notify gitlab
 	if (gitlabStagesRemaining[stageName] != null) {
 		callIfExist ('updateGitlabCommitStatus',
 			[name: gitlabStagesRemaining[stageName], state: 'success'])
@@ -264,11 +266,23 @@ def onStageSuccess (stageName) {
 // run when a stage failed
 def onStageFailure (stageName) {
 
-	// notify gitlab //
 	if (gitlabStagesRemaining[stageName] != null) {
+
+		// notify gitlab
 		callIfExist ('updateGitlabCommitStatus',
 			[name: gitlabStagesRemaining[stageName], state: 'failed'])
 		gitlabStagesRemaining .remove (stageName)
+
+		// notify slack
+		def buildUrl = (env.BUILD_URL + '/display/redirect')
+			.replaceAll (/(?<!:)\/+/, '/')
+		callIfExist ('slackSend',
+			[
+				color: 'danger',
+				message: 'Job \'' + env.JOB_NAME
+					+ '\' Failed (' + buildUrl + ')'
+			]
+		)
 	}
 }
 
