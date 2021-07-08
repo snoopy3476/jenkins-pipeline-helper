@@ -83,7 +83,8 @@ pipelineStages = [
 					sh (
 						label: 'Gradle Build',
 						script: '''#!/bin/bash
-							./gradlew -g "$GRADLE_HOME" clean build --stacktrace -x test
+							./gradlew -g "$GRADLE_HOME" \\
+								clean build --stacktrace -x test
 							'''
 					)
 
@@ -150,7 +151,8 @@ pipelineStages = [
 					returnStdout: true,
 					script: '''
 							[ -d "build/test-results" ] \\
-							&& find "build/test-results" -name "*.xml" \\
+							&& find "build/test-results" \\
+								-name "*.xml" \\
 							|| true
 						'''
 				) .readLines () .sort ()
@@ -160,25 +162,28 @@ pipelineStages = [
 			junitXmlList. eachWithIndex { path, idx ->
 
 				// get file basename
-				def posFrom = path .lastIndexOf ('/') + 1 // if -1 (no occurence), then set to 0
+				def posFrom = path .lastIndexOf ('/') + 1 // no occurence: 0
 				def posTo = path .lastIndexOf ('.')
 				def basename = path .substring (posFrom, posTo)
 
-				junitParallelSteps << [('[' + idx .toString () + '] ' + basename): {
+				junitParallelSteps .put (
+					'[' + idx .toString () + '] ' + basename,
+					{
+						def res = junit (path)
+						if (res .failCount == 0) {
+							echo ('Test res of \'' + basename + '\': '
+								+ '[ Total ' + res .totalCount
+								+ ', Passed ' + res .passCount
+								+ ', Failed ' + res .failCount
+								+ ', Skipped ' + res .skipCount
+								+ ' ]')
+						} else {
+							throw (new Exception ('Test failed: \''
+								+ path + '\'') )
+						}
 
-					def summary = junit (path)
-
-					if (summary .failCount == 0) {
-						echo ('Test summary of \'' + basename + '\': '
-							+ '[ Total ' + summary .totalCount
-							+ ', Passed ' + summary .passCount
-							+ ', Failed ' + summary .failCount
-							+ ', Skipped ' + summary .skipCount + ' ]')
-					} else {
-						throw (new Exception ('Test failed: \'' + path + '\'') )
 					}
-
-				}]
+				)
 			}
 
 			// execute parallel junit jobs
@@ -237,8 +242,10 @@ def runStage (stageName, stageCode) {
 def onStageRunning (stageName) {
 
 	// notify gitlab //
-	callIfExist ('updateGitlabCommitStatus',
-		[name: gitlabStageStrs[stageName], state: 'running'])
+	if (gitlabStagesRemaining[stageName] != null) {
+		callIfExist ('updateGitlabCommitStatus',
+			[name: gitlabStagesRemaining[stageName], state: 'running'])
+	}
 }
 
 
@@ -246,8 +253,11 @@ def onStageRunning (stageName) {
 def onStageSuccess (stageName) {
 
 	// notify gitlab //
-	callIfExist ('updateGitlabCommitStatus',
-		[name: gitlabStageStrs[stageName], state: 'success'])
+	if (gitlabStagesRemaining[stageName] != null) {
+		callIfExist ('updateGitlabCommitStatus',
+			[name: gitlabStagesRemaining[stageName], state: 'success'])
+		gitlabStagesRemaining .remove (stageName)
+	}
 }
 
 
@@ -255,22 +265,10 @@ def onStageSuccess (stageName) {
 def onStageFailure (stageName) {
 
 	// notify gitlab //
-
-	// notify cur stage as failed first
-	callIfExist ('updateGitlabCommitStatus',
-		[name: gitlabStageStrs[stageName], state: 'failed'])
-
-	// notify stages after the cur stage as canceled
-	def stageToBeCanceled = false
-	pipelineStages .each { key, value ->
-
-		if (stageToBeCanceled) {
-			callIfExist ('updateGitlabCommitStatus',
-				[name: gitlabStageStrs[key], state: 'canceled'])
-		} else if (key == stageName) {
-			// stages after the cur stage will be notify as canceled
-			stageToBeCanceled = true
-		}
+	if (gitlabStagesRemaining[stageName] != null) {
+		callIfExist ('updateGitlabCommitStatus',
+			[name: gitlabStagesRemaining[stageName], state: 'failed'])
+		gitlabStagesRemaining .remove (stageName)
 	}
 }
 
@@ -291,7 +289,7 @@ def callIfExist (func, args, bodyCode=null) {
 		} else {
 			return ("$func" (args) { bodyCode () })
 		}
-	} catch (NoSuchMethodError error) {
+	} catch (NoSuchMethodError error) { // catch & ignore 'no method found' exception only
 		echo ('callIfExist: Method \'' + func + '\' not found, skip running')
 		return (false)
 	}
@@ -312,45 +310,49 @@ def main () {
 	// make array of gitlab stages (format: ##. stagename)
 	def stageLen = pipelineStages .size () + 1
 	def padCount = stageLen .toString () .length ()
-	gitlabStageStrs = ['podinit': '0' .padLeft (padCount, '0') + '. PodInit']
+	gitlabStagesRemaining = ['podinit': '0' .padLeft (padCount, '0') + '. PodInit']
 	pipelineStages .eachWithIndex { key, value, idx ->
-		gitlabStageStrs .put (key, (idx+1) .toString () .padLeft (padCount, '0') + '. ' + key)
+		gitlabStagesRemaining .put (
+			key,
+			(idx+1) .toString () .padLeft (padCount, '0') + '. ' + key
+		)
 	}
-
-	// notify gitlab pending stages
-	callIfExist ('gitlabBuilds',
-		[builds: gitlabStageStrs .values () as ArrayList],
-		{} )
 
 
 	// init pod, and iterate for defined stages
-	onStageRunning ('podinit')
-	def podinitsuccess = false
 	try {
+		// notify gitlab pending stages
+		callIfExist ('gitlabBuilds',
+			[builds: gitlabStagesRemaining .values () as ArrayList],
+			{} )
 
-		
+		// set podinit stage as running
+		onStageRunning ('podinit')
+
 		podTemplate (podTemplateInfo) {
-
-
 			node ('jenkins-slave-pod') {
-				// podinit finished
-				onStageSuccess ('podinit')
-				podinitsuccess = true
 
+				// set podinit stage as success
+				onStageSuccess ('podinit')
+
+				// iterate stages
 				pipelineStages .each{ key, value ->
 					runStage (key, value)
 				}
-
-
 			}
-
 		}
 
 	} catch (error) {
-		
-		if (! podinitsuccess) {
-			onStageFailure ('podinit')
+
+		// set podinit stage as failed, if pending
+		onStageFailure ('podinit')
+
+		// notify all remaining gitlab stages as canceled
+		gitlabStagesRemaining .each { key, value ->
+			callIfExist ('updateGitlabCommitStatus',
+				[name: value, state: 'canceled'])
 		}
+
 		throw (error)
 	}
 }
