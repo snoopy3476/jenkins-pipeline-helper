@@ -8,7 +8,16 @@
  *                                                 *
  ***************************************************/
 
+// gradle config
 gradleHomePath = '/home/jenkins/.gradle'
+gradleLocalCachePath = '/tmp/jenkins/.gradle'
+
+// docker private registry config
+privateRegUrl = 'https://k8s-docker-registry'
+privateRegPort = '30000'
+deployImgName = env.JOB_NAME
+deployImgVer = env.BUILD_NUMBER
+privateRegCredId = 'inner-private-registry-cred' // Jenkins credential
 
 
 
@@ -46,7 +55,7 @@ podTemplateInfo = [
 				hostPath: '/var/run/docker.sock'), 
 		// gradle home caching: mount local host path to 'gradleHomePath'
 		hostPathVolume (mountPath: gradleHomePath,
-				hostPath: '/tmp/jenkins/.gradle'),
+				hostPath: gradleLocalCachePath),
 	],
 ]
 
@@ -84,8 +93,8 @@ pipelineStages = [
 
 					sh (
 						label: 'Gradle Build',
-						script: '''#!/bin/bash
-							./gradlew -g "$GRADLE_HOME" \\
+						script: '''
+							./gradlew -g "$GRADLE_HOME" --parallel \\
 								clean build --stacktrace -x test
 							'''
 					)
@@ -94,7 +103,7 @@ pipelineStages = [
 
 					sh (
 						label: 'Dummy Submodule Build',
-						script: '''#!/bin/bash
+						script: '''
 							./gradlew -g "$GRADLE_HOME" -v
 							echo dummy build script 1
 						'''
@@ -104,7 +113,7 @@ pipelineStages = [
 
 					sh (
 						label: 'Dummy Submodule Build',
-						script: '''#!/bin/bash
+						script: '''
 							./gradlew -g "$GRADLE_HOME" -v
 							echo dummy build script 2
 							'''
@@ -203,7 +212,11 @@ pipelineStages = [
 
 	'Push': {
 		container ('push-container') {
-			sh ('docker build --tag demo-app:0.0.1 .')
+			dockerImg = docker .build (deployImgName)
+			docker .withRegistry (privateRegUrl + ':' + privateRegPort, privateRegCredId) {
+				dockerImg .push (deployImgVer)
+				dockerImg .push ()
+			}
 		}
 	}
 
