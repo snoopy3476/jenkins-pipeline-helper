@@ -203,8 +203,7 @@ pipelineStages = [
 
 	'Push': {
 		container ('push-container') {
-			echo ('- Push')
-			sleep (5)
+			sh ('docker build --tag demo-app:0.0.1 .')
 		}
 	}
 
