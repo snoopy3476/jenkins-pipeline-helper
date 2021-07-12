@@ -1,6 +1,10 @@
-/***** Demo Spring + Gradle cycle JenkinsFile for Tmax HE CI/CD *****/
+/***** Demo Spring + Gradle cycle JenkinsFile *****/
 // Required plugins (Need for the script): Kubernetes, Docker
 // Recommended plugins (Used in the script, but not required): GitLab
+
+
+
+
 
 /***************************************************
  *                                                 *
@@ -8,16 +12,40 @@
  *                                                 *
  ***************************************************/
 
-// gradle config
-gradleHomePath = '/home/jenkins/.gradle'
-gradleLocalCachePath = '/tmp/jenkins/.gradle'
+// local env vars
+def localEnv = [
 
-// docker private registry config
-privateRegUrl = 'https://k8s-docker-registry'
-privateRegPort = '30000'
-deployImgName = env.JOB_NAME
-deployImgVer = env.BUILD_NUMBER
-privateRegCredId = 'inner-private-registry-cred' // Jenkins credential
+	// gradle config
+	GRADLE_HOME_PATH: '/home/jenkins/.gradle',
+	GRADLE_LOCAL_CACHE_PATH: '/tmp/jenkins/.gradle',
+
+	// docker private registry config
+	PRIVATE_REG_URL: 'https://k8s-docker-registry',
+	PRIVATE_REG_PORT: '30000',
+	DEPLOY_IMG_NAME: env.JOB_NAME, // Job name should be docker-img-name-compatible
+	DEPLOY_IMG_VER: env.BUILD_NUMBER,
+	PRIVATE_REG_CRED_ID: 'inner-private-registry-cred', // Jenkins credential
+
+	// slackSend config
+	BUILD_TIME_STR: getCurrentTimeStr ('Asia/Seoul'),
+
+]
+
+
+
+// get current time string, with timezone
+def getCurrentTimeStr (timezone='UTC') {
+        def simpleDateFormat = (new java.text.SimpleDateFormat('yyyy.MM.dd-HH:mm:ss-z'))
+        simpleDateFormat.setTimeZone (TimeZone.getTimeZone(timezone))
+	return (simpleDateFormat.format(new Date()))
+}
+
+
+
+// convert map to withEnv arguments
+def mapToEnv (map) {
+	return ( map.collect({ key, value -> "${key}=${value}" }) )
+}
 
 
 
@@ -29,7 +57,8 @@ privateRegCredId = 'inner-private-registry-cred' // Jenkins credential
  *                                                 *
  ***************************************************/
 
-podTemplateInfo = [
+def getPodTemplateInfo () { return ([
+
 	label: 'jenkins-slave-pod', 
 	containers: [
 		containerTemplate (
@@ -45,19 +74,17 @@ podTemplateInfo = [
 			ttyEnabled: true
 		),
 	],
-	envVars: [
-		// gradle home to store dependencies
-		envVar (key: 'GRADLE_HOME', value: gradleHomePath),
-	],
 	volumes: [ 
 		// for docker
 		hostPathVolume (mountPath: '/var/run/docker.sock',
 				hostPath: '/var/run/docker.sock'), 
-		// gradle home caching: mount local host path to 'gradleHomePath'
-		hostPathVolume (mountPath: gradleHomePath,
-				hostPath: gradleLocalCachePath),
+		// gradle home caching: mount local host path to 'env.GRADLE_HOME_PATH'
+		hostPathVolume (mountPath: env.GRADLE_HOME_PATH,
+				hostPath: env.GRADLE_LOCAL_CACHE_PATH),
 	],
-]
+
+
+])}
 
 
 
@@ -69,13 +96,16 @@ podTemplateInfo = [
  *                                                 *
  ***************************************************/
 
-pipelineStages = [
+def getPipelineStages () { return ([
+
+// PodInitialize Stage: for k8s pod init stage, should not be removed
+	PodInitialize: { assert (false) }, 
 
 
 
 /***** Checkout Stage *****/
 
-	'Checkout': {
+	Checkout: {
 		checkout (scm)
 	},
 
@@ -83,7 +113,7 @@ pipelineStages = [
 
 /***** Build Stage *****/
 
-	'Build': {
+	Build: {
 		try {
 
 			container ('build-container') {
@@ -93,30 +123,28 @@ pipelineStages = [
 
 					sh (
 						label: 'Gradle Build',
-						script: '''
-							./gradlew -g "$GRADLE_HOME" --parallel \\
+						script: """
+							./gradlew -g ${env.GRADLE_HOME_PATH} --parallel \\
 								clean build --stacktrace -x test
-							'''
+						"""
 					)
 
 				}, '[1] Dummy for submodule': {
 
 					sh (
 						label: 'Dummy Submodule Build',
-						script: '''
-							./gradlew -g "$GRADLE_HOME" -v
-							echo dummy build script 1
-						'''
+						script: """
+							./gradlew -g ${env.GRADLE_HOME_PATH} -v
+						"""
 					)
 
 				}, '[2] Dummy for submodule': {
 
 					sh (
 						label: 'Dummy Submodule Build',
-						script: '''
-							./gradlew -g "$GRADLE_HOME" -v
-							echo dummy build script 2
-							'''
+						script: """
+							./gradlew -g ${env.GRADLE_HOME_PATH} -v
+						"""
 					)
 
 				})
@@ -141,13 +169,16 @@ pipelineStages = [
 
 /***** Test Stage *****/
 
-	'Test': {
+	Test: {
 		try {
 
 			container ('build-container') {
 				sh (
 					label: 'Gradle Parallel Test',
-					script: './gradlew -g "$GRADLE_HOME" test --parallel'
+					script: """
+						./gradlew -g ${env.GRADLE_HOME_PATH} --parallel \\
+							test --stacktrace -x build
+					"""
 				)
 			}
 
@@ -166,39 +197,39 @@ pipelineStages = [
 								-name "*.xml" \\
 							|| true
 						'''
-				) .readLines () .sort ()
+				).readLines().sort()
 
 			// list of parallel jobs
 			junitParallelSteps = [:]
-			junitXmlList. eachWithIndex { path, idx ->
+			junitXmlList.eachWithIndex ({ path, idx ->
 
 				// get file basename
-				def posFrom = path .lastIndexOf ('/') + 1 // no occurence: 0
-				def posTo = path .lastIndexOf ('.')
-				def basename = path .substring (posFrom, posTo)
+				def posFrom = path.lastIndexOf ('/') + 1 // no occurence: 0
+				def posTo = path.lastIndexOf ('.')
+				def basename = path.substring (posFrom, posTo)
 
-				junitParallelSteps .put (
-					'[' + idx .toString () + '] ' + basename,
+				junitParallelSteps.put (
+					"[${idx}] ${basename}",
 					{
 						def res = junit (path)
-						if (res .failCount == 0) {
-							echo ('Test results of \'' + basename + '\': '
-								+ '[ Total ' + res .totalCount
-								+ ', Passed ' + res .passCount
-								+ ', Failed ' + res .failCount
-								+ ', Skipped ' + res .skipCount
-								+ ' ]')
+						if (res.failCount == 0) {
+							echo (
+								"Test results of '${basename}': ["
+								+ "Total ${res.totalCount}, "
+								+ "Passed ${res.passCount}, "
+								+ "Failed ${res.failCount}, "
+								+ "Skipped ${res.skipCount}]"
+							)
 						} else {
-							throw (new Exception ('Test failed: \''
-								+ path + '\'') )
+							throw (new Exception ("Test failed: '${path}'"))
 						}
 
 					}
 				)
-			}
+			})
 
 			// execute parallel junit jobs
-			if (junitParallelSteps .size () > 0) {
+			if (junitParallelSteps.size() > 0) {
 				parallel (junitParallelSteps)
 			}
 
@@ -210,17 +241,19 @@ pipelineStages = [
 
 /***** Push Stage *****/
 
-	'Push': {
+	Push: {
 		container ('push-container') {
-			dockerImg = docker .build (deployImgName)
-			docker .withRegistry (privateRegUrl + ':' + privateRegPort, privateRegCredId) {
-				dockerImg .push (deployImgVer)
-				dockerImg .push ()
+			dockerImg = docker.build (env.DEPLOY_IMG_NAME)
+			docker.withRegistry ("${env.PRIVATE_REG_URL}:${env.PRIVATE_REG_PORT}",
+				env.PRIVATE_REG_CRED_ID) {
+				dockerImg.push (env.DEPLOY_IMG_VER)
+				dockerImg.push ()
 			}
 		}
 	}
 
-]
+
+])}
 
 
 
@@ -234,21 +267,22 @@ pipelineStages = [
  ***************************************************/
 
 // run stage with some pre/post jobs for the stage
-def runStage (stageName, stageCode) {
+def runStage (stageElem) {
 
-	onStageRunning (stageName)
+	onStageRunning (stageElem.key)
 
-	stage (stageName) {
+	stage (stageElem.key) {
 		try {
-			stageCode ()
+			(stageElem.value) ()
 
 		} catch (error) {
-			onStageFailure (stageName)
+			onStageFailure (stageElem.key)
 			throw (error)
 		}
 	}
 
-	onStageSuccess (stageName)
+	onStageSuccess (stageElem.key)
+	return (true)
 }
 
 
@@ -256,10 +290,8 @@ def runStage (stageName, stageCode) {
 def onStageRunning (stageName) {
 
 	// notify gitlab
-	if (gitlabStagesRemaining[stageName] != null) {
-		callIfExist ('updateGitlabCommitStatus',
-			[name: gitlabStagesRemaining[stageName], state: 'running'])
-	}
+	callIfExist ('updateGitlabCommitStatus',
+		[name: env."GITLABSTAGE__${stageName}", state: 'running'])
 }
 
 
@@ -267,35 +299,32 @@ def onStageRunning (stageName) {
 def onStageSuccess (stageName) {
 
 	// notify gitlab
-	if (gitlabStagesRemaining[stageName] != null) {
-		callIfExist ('updateGitlabCommitStatus',
-			[name: gitlabStagesRemaining[stageName], state: 'success'])
-		gitlabStagesRemaining .remove (stageName)
-	}
+	callIfExist ('updateGitlabCommitStatus',
+		[name: env."GITLABSTAGE__${stageName}", state: 'success'])
+
 }
 
 
 // run when a stage failed
 def onStageFailure (stageName) {
 
-	if (gitlabStagesRemaining[stageName] != null) {
+	// notify gitlab
+	callIfExist ('updateGitlabCommitStatus',
+		[name: env."GITLABSTAGE__${stageName}", state: 'failed'])
 
-		// notify gitlab
-		callIfExist ('updateGitlabCommitStatus',
-			[name: gitlabStagesRemaining[stageName], state: 'failed'])
-		gitlabStagesRemaining .remove (stageName)
+	// notify slack
+	callIfExist ('slackSend',
+		[
+			color: 'danger',
+			message: "[${env.BUILD_TIME_STR}] Job FAILED" + """
+"""					+ "- ${env.JOB_NAME} "
+				+ "(${(env.BRANCH_NAME != null) ? (env.BRANCH_NAME + '/') : ('')}"
+				+ "${env.BUILD_NUMBER})"
+				+ ": stage '${stageName}'" + """
+"""					+ "(Link: ${env.RUN_DISPLAY_URL})"
+		]
+	)
 
-		// notify slack
-		def buildUrl = (env.BUILD_URL + '/display/redirect')
-			.replaceAll (/(?<!:)\/+/, '/')
-		callIfExist ('slackSend',
-			[
-				color: 'danger',
-				message: 'Job \'' + env.JOB_NAME
-					+ '\' Failed (' + buildUrl + ')'
-			]
-		)
-	}
 }
 
 
@@ -313,11 +342,11 @@ def callIfExist (func, args, bodyCode=null) {
 		if (bodyCode == null) {
 			return ("$func" (args))
 		} else {
-			return ("$func" (args) { bodyCode () })
+			return ("$func" (args) { bodyCode() })
 		}
 	} catch (NoSuchMethodError error) { // catch & ignore 'no method found' exception only
-		echo ('callIfExist: Method \'' + func + '\' not found, skip running')
-		return (false)
+		echo ("callIfExist: Method '${func}' not found, skip call")
+		return (null)
 	}
 }
 
@@ -333,56 +362,102 @@ def callIfExist (func, args, bodyCode=null) {
 
 def main () {
 
-	// make array of gitlab stages (format: ##. stagename)
-	def stageLen = pipelineStages .size () + 1
-	def padCount = stageLen .toString () .length ()
-	gitlabStagesRemaining = ['podinit': '0' .padLeft (padCount, '0') + '. PodInit']
-	pipelineStages .eachWithIndex { key, value, idx ->
-		gitlabStagesRemaining .put (
-			key,
-			(idx+1) .toString () .padLeft (padCount, '0') + '. ' + key
-		)
-	}
+	// get pipeline stages
+	def pipelineStages = getPipelineStages ()
+
+	// get gitlab stage names
+	def gitlabStages = [:]
+	def stageCountMaxDigitLen = pipelineStages.size().toString().length() // 0 pad count
+	pipelineStages.eachWithIndex ({ key, value, idx -> gitlabStages.put(
+		"GITLABSTAGE__${key}",
+		"${(idx).toString().padLeft(stageCountMaxDigitLen,'0')}. ${key}"
+	) })
+
+	withEnv ( mapToEnv(gitlabStages) ) {
+
+		// set remaining stages
+		def stagesRemaining = pipelineStages.keySet ()
+
+		// init pod, and iterate for defined stages
+		try {
+			// notify gitlab pending stages
+			pipelineStages.each ({ key, value ->
+				callIfExist ('updateGitlabCommitStatus',
+					[name: env."GITLABSTAGE__${key}", state: 'pending'])
+			})
+
+			// set Pod Initialize stage as running
+			onStageRunning ('PodInitialize') // stage 0
+
+			// notify slack - job start
+			callIfExist ('slackSend',
+				[
+					color: 'warning',
+					message: "[${env.BUILD_TIME_STR}] Job Started" + """
+"""						+ "- ${env.JOB_NAME} "
+						+ "(${(env.BRANCH_NAME != null) ? (env.BRANCH_NAME + '/') : ('')}"
+						+ "${env.BUILD_NUMBER})" + """
+"""						+ "(Link: ${env.RUN_DISPLAY_URL})"
+				]
+			)
 
 
-	// init pod, and iterate for defined stages
-	try {
-		// notify gitlab pending stages
-		callIfExist ('gitlabBuilds',
-			[builds: gitlabStagesRemaining .values () as ArrayList],
-			{} )
+			// iterate all stages
+			podTemplate (getPodTemplateInfo()) {
+				node ('jenkins-slave-pod') {
 
-		// set podinit stage as running
-		onStageRunning ('podinit')
+					// set Pod Initialize stage as success
+					onStageSuccess ('PodInitialize') // stage 0
+					pipelineStages.remove ('PodInitialize')
+					stagesRemaining.remove ('PodInitialize')
 
-		podTemplate (podTemplateInfo) {
-			node ('jenkins-slave-pod') {
-
-				// set podinit stage as success
-				onStageSuccess ('podinit')
-
-				// iterate stages
-				pipelineStages .each{ key, value ->
-					runStage (key, value)
+					// iterate stages
+					pipelineStages.each ({ stageElem ->
+						runStage (stageElem)
+						stagesRemaining.remove (stageElem.key)
+					})
 				}
 			}
+
+
+			// notify slack - job succeeded
+			callIfExist ('slackSend',
+				[
+					color: 'good',
+					message: "[${env.BUILD_TIME_STR}] Job Succeeded" + """
+"""						+ "- ${env.JOB_NAME} "
+						+ "(${(env.BRANCH_NAME != null) ? (env.BRANCH_NAME + '/') : ('')}"
+						+ "${env.BUILD_NUMBER})" + """
+"""						+ "(Link: ${env.RUN_DISPLAY_URL})"
+				]
+			)
+
+		} catch (error) {
+
+			// set Pod Initialize stage as failed, if not finished
+			if ( stagesRemaining.contains('PodInitialize') ) {
+				onStageFailure ('PodInitialize')
+				stagesRemaining.remove ('PodInitialize')
+			}
+
+			// notify all remaining gitlab stages as canceled
+			stagesRemaining.each ({ stageName ->
+				callIfExist ('updateGitlabCommitStatus',
+					[name: env."GITLABSTAGE__${stageName}", state: 'canceled'])
+			})
+
+			throw (error)
 		}
 
-	} catch (error) {
 
-		// set podinit stage as failed, if pending
-		onStageFailure ('podinit')
-
-		// notify all remaining gitlab stages as canceled
-		gitlabStagesRemaining .each { key, value ->
-			callIfExist ('updateGitlabCommitStatus',
-				[name: value, state: 'canceled'])
-		}
-
-		throw (error)
-	}
+	} // withEnv
 }
 
 
-// exec main ()
-main ()
+
+
+
+// exec main
+withEnv ( mapToEnv(localEnv) ) {
+	main ()
+}
