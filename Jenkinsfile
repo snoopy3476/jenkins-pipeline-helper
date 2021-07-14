@@ -23,7 +23,7 @@ def localEnv = [
 	PRIVATE_REG_URL: 'https://k8s-docker-registry',
 	PRIVATE_REG_PORT: '30000',
 	DEPLOY_IMG_NAME: env.JOB_NAME, // Job name should be docker-img-name-compatible
-	DEPLOY_IMG_VER: env.BUILD_NUMBER,
+	DEPLOY_IMG_TAG: 'build-' + env.BUILD_NUMBER + '_commit-' + env.GIT_COMMIT,
 	PRIVATE_REG_CRED_ID: 'inner-private-registry-cred', // Jenkins credential
 
 	// slackSend config
@@ -246,7 +246,7 @@ def getPipelineStages () { return ([
 			dockerImg = docker.build (env.DEPLOY_IMG_NAME)
 			docker.withRegistry ("${env.PRIVATE_REG_URL}:${env.PRIVATE_REG_PORT}",
 				env.PRIVATE_REG_CRED_ID) {
-				dockerImg.push (env.DEPLOY_IMG_VER)
+				dockerImg.push (env.DEPLOY_IMG_TAG)
 				dockerImg.push ()
 			}
 		}
@@ -267,21 +267,21 @@ def getPipelineStages () { return ([
  ***************************************************/
 
 // run stage with some pre/post jobs for the stage
-def runStage (stageElem) {
+def runStage (stageName, stageCode) {
 
-	onStageRunning (stageElem.key)
+	onStageRunning (stageName)
 
-	stage (stageElem.key) {
+	stage (stageName) {
 		try {
-			(stageElem.value) ()
+			stageCode ()
 
 		} catch (error) {
-			onStageFailure (stageElem.key)
+			onStageFailure (stageName)
 			throw (error)
 		}
 	}
 
-	onStageSuccess (stageElem.key)
+	onStageSuccess (stageName)
 	return (true)
 }
 
@@ -411,11 +411,19 @@ def main () {
 					pipelineStages.remove ('PodInitialize')
 					stagesRemaining.remove ('PodInitialize')
 
+
+					// iterate stages
+					pipelineStages.keySet().each ({ stageName ->
+						runStage (stageName, pipelineStages[stageName])
+						pipelineStages.remove (stageName)
+						echo (stageName + ': ' + pipelineStages.size().toString())
+					})
+/*
 					// iterate stages
 					pipelineStages.each ({ stageElem ->
 						runStage (stageElem)
 						stagesRemaining.remove (stageElem.key)
-					})
+					})*/
 				}
 			}
 
