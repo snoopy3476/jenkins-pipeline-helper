@@ -1,6 +1,6 @@
 /***** Demo Spring + Gradle cycle JenkinsFile *****/
 // Required plugins (Need for the script): Kubernetes, Docker
-// Recommended plugins (Used in the script, but not required): GitLab
+// Recommended plugins (Used in the script, but not required): GitLab, Slack
 
 
 
@@ -12,33 +12,82 @@
  *                                                 *
  ***************************************************/
 
-// local env vars
-def localEnv = [
+// get constant env vars
+def getConstEnv () {
 
-	// gradle config
-	GRADLE_HOME_PATH: '/home/jenkins/.gradle',
-	GRADLE_LOCAL_CACHE_PATH: '/tmp/jenkins/.gradle',
+	def returnEnv = [
 
-	// docker private registry config
-	PRIVATE_REG_URL: 'https://k8s-docker-registry',
-	PRIVATE_REG_PORT: '30000',
-	DEPLOY_IMG_NAME: env.JOB_NAME, // Job name should be docker-img-name-compatible
-	DEPLOY_IMG_TAG: 'build-' + env.BUILD_NUMBER + '_commit-' + env.GIT_COMMIT,
-	PRIVATE_REG_CRED_ID: 'inner-private-registry-cred', // Jenkins credential
+		// gradle config
+		GRADLE_HOME_PATH: '/home/jenkins/.gradle',
+		GRADLE_LOCAL_CACHE_PATH: '/tmp/jenkins/.gradle',
 
-	// slackSend config
-	BUILD_TIME_STR: getCurrentTimeStr ('Asia/Seoul'),
-
-]
+		// docker private registry config
+		PRIVATE_REG_URL: 'https://k8s-docker-registry',
+		PRIVATE_REG_PORT: '30000',
+		DEPLOY_IMG_NAME: env.JOB_NAME, // Job name should be docker-img-name-compatible
+		DEPLOY_IMG_TAG: 'build-' + env.BUILD_NUMBER,
+		PRIVATE_REG_CRED_ID: 'inner-private-registry-cred', // Jenkins credential
 
 
+		// newline char
+		NLCHAR: '''
+''',
 
-// get current time string, with timezone
-def getCurrentTimeStr (timezone='UTC') {
-        def simpleDateFormat = (new java.text.SimpleDateFormat('yyyy.MM.dd-HH:mm:ss-z'))
-        simpleDateFormat.setTimeZone (TimeZone.getTimeZone(timezone))
-	return (simpleDateFormat.format(new Date()))
+		// init stage name
+		INIT_STAGE_NAME: 'Initialize',
+	]
+
+
+	return (mapToEnv(returnEnv))
 }
+
+
+
+
+
+// get dynamic env vars
+def getDynEnv () {
+
+	def returnEnv = [:]
+
+
+	// BUILD_START_TIME_TS, BUILD_START_TIME_STR
+	def buildDate = (new Date())
+	def buildStartTimeEnv = [
+		BUILD_START_TIME_TS: (Long) (buildDate.getTime() / 1000),
+		BUILD_START_TIME_STR: buildDate.toString(),
+	]
+	returnEnv.putAll (buildStartTimeEnv)
+	
+
+	// SLACK_MSG_CH, SLACK_MSG_TS
+	withEnv (mapToEnv(buildStartTimeEnv)) {
+		def slackRes = slackSendWrapper ("- Job Triggered!\n")
+		returnEnv.putAll ([
+			SLACK_MSG_CH: slackRes.channelId,
+			SLACK_MSG_TS: slackRes.ts,
+		])
+	}
+
+
+	// GITLABSTAGE__*
+	def pipelineStages = getPipelineStages ()
+	def gitlabStages = [:]
+	def stageCountMaxDigitLen = pipelineStages.size().toString().length() // 0 pad count
+	pipelineStages.eachWithIndex ({ key, value, idx ->
+		gitlabStages.put (
+			"GITLABSTAGE__${key}",
+			"${(idx).toString().padLeft(stageCountMaxDigitLen,'0')}. ${key}"
+		)
+	})
+	returnEnv.putAll (gitlabStages)
+	
+
+
+	return (mapToEnv(returnEnv))
+}
+
+
 
 
 
@@ -98,16 +147,8 @@ def getPodTemplateInfo () { return ([
 
 def getPipelineStages () { return ([
 
-// PodInitialize Stage: for k8s pod init stage, should not be removed
-	PodInitialize: { assert (false) }, 
-
-
-
-/***** Checkout Stage *****/
-
-	Checkout: {
-		checkout (scm)
-	},
+// Initialize Stage: for init stage (k8s pod init, checkout), should not be removed
+	(env.INIT_STAGE_NAME): { assert (false) }, 
 
 
 
@@ -273,6 +314,7 @@ def runStage (stageName, stageCode) {
 
 	stage (stageName) {
 		try {
+
 			stageCode ()
 
 		} catch (error) {
@@ -286,12 +328,27 @@ def runStage (stageName, stageCode) {
 }
 
 
+// run when a stage pending
+def onStagePending (stageName) {
+
+	// notify gitlab
+	callIfExist ('updateGitlabCommitStatus',
+		[name: env."GITLABSTAGE__${stageName}", state: 'pending'])
+
+}
+
+
 // run when a stage starts to run
 def onStageRunning (stageName) {
 
 	// notify gitlab
 	callIfExist ('updateGitlabCommitStatus',
 		[name: env."GITLABSTAGE__${stageName}", state: 'running'])
+
+	// notify slack, if slack is botUser mode (when editing already-sent msg is possible)
+	if (env.SLACK_MSG_TS != null) {
+		slackSendWrapper ("- Stage Running... ( ${stageName} )\n")
+	}
 }
 
 
@@ -313,17 +370,17 @@ def onStageFailure (stageName) {
 		[name: env."GITLABSTAGE__${stageName}", state: 'failed'])
 
 	// notify slack
-	callIfExist ('slackSend',
-		[
-			color: 'danger',
-			message: "[${env.BUILD_TIME_STR}] Job FAILED" + """
-"""					+ "- ${env.JOB_NAME} "
-				+ "(${(env.BRANCH_NAME != null) ? (env.BRANCH_NAME + '/') : ('')}"
-				+ "${env.BUILD_NUMBER})"
-				+ ": stage '${stageName}'" + """
-"""					+ "(Link: ${env.RUN_DISPLAY_URL})"
-		]
-	)
+	slackSendWrapper ("- Stage *FAILED!* ( ${stageName} )\n", 'danger')
+
+}
+
+
+// run when a stage failed
+def onStageCancel (stageName) {
+
+	// notify gitlab
+	callIfExist ('updateGitlabCommitStatus',
+		[name: env."GITLABSTAGE__${stageName}", state: 'canceled'])
 
 }
 
@@ -333,7 +390,7 @@ def onStageFailure (stageName) {
 
 /***************************************************
  *                                                 *
- *             [ Plugin Method Check ]             *
+ *               [ Plugin Methods ]                *
  *                                                 *
  ***************************************************/
 
@@ -351,6 +408,38 @@ def callIfExist (func, args, bodyCode=null) {
 }
 
 
+// get slack msg header
+def getSlackMsgHeader () {
+	return (
+		(
+			env.BUILD_START_TIME_TS != null ?
+			"[<!date^${env.BUILD_START_TIME_TS}^{date_short_pretty} {time_secs}|${env.BUILD_START_TIME_STR}>] " :
+			""
+		)
+		+ "<${env.RUN_DISPLAY_URL}|"
+			+ "${env.JOB_NAME} (${env.BUILD_NUMBER}"
+			+ (env.GIT_BRANCH != null ? ": ${env.GIT_BRANCH}" : "")
+		+ ")>" + env.NLCHAR
+	)
+}
+
+
+// slack send
+def slackSendWrapper (msg, msgColor=null) {
+
+	return (
+		callIfExist ('slackSend', [
+			channel: env.SLACK_MSG_CH,
+			timestamp: env.SLACK_MSG_TS,
+			message: getSlackMsgHeader() + msg,
+			color: msgColor
+		])
+	)
+
+}
+
+
+
 
 
 
@@ -362,110 +451,69 @@ def callIfExist (func, args, bodyCode=null) {
 
 def main () {
 
-	// get pipeline stages
-	def pipelineStages = getPipelineStages ()
+	withEnv (getConstEnv()) { withEnv(getDynEnv()) {
 
-	// get gitlab stage names
-	def gitlabStages = [:]
-	def stageCountMaxDigitLen = pipelineStages.size().toString().length() // 0 pad count
-	pipelineStages.eachWithIndex ({ key, value, idx -> gitlabStages.put(
-		"GITLABSTAGE__${key}",
-		"${(idx).toString().padLeft(stageCountMaxDigitLen,'0')}. ${key}"
-	) })
+		// get pipeline stages
+		def pipelineStages = getPipelineStages ()
 
-	withEnv ( mapToEnv(gitlabStages) ) {
-
-		// set remaining stages
-		def stagesRemaining = pipelineStages.keySet ()
 
 		// init pod, and iterate for defined stages
 		try {
 			// notify gitlab pending stages
-			pipelineStages.each ({ key, value ->
-				callIfExist ('updateGitlabCommitStatus',
-					[name: env."GITLABSTAGE__${key}", state: 'pending'])
-			})
+			pipelineStages.each ({ stageName, stageCode -> onStagePending(stageName) })
 
-			// set Pod Initialize stage as running
-			onStageRunning ('PodInitialize') // stage 0
+			// set Initialize stage as running
+			onStageRunning (env.INIT_STAGE_NAME) // init stage
 
-			// notify slack - job start
-			callIfExist ('slackSend',
-				[
-					color: 'warning',
-					message: "[${env.BUILD_TIME_STR}] Job Started" + """
-"""						+ "- ${env.JOB_NAME} "
-						+ "(${(env.BRANCH_NAME != null) ? (env.BRANCH_NAME + '/') : ('')}"
-						+ "${env.BUILD_NUMBER})" + """
-"""						+ "(Link: ${env.RUN_DISPLAY_URL})"
-				]
-			)
-
-
-			// iterate all stages
+			// ready pod
 			podTemplate (getPodTemplateInfo()) {
 				node ('jenkins-slave-pod') {
 
-					// set Pod Initialize stage as success
-					onStageSuccess ('PodInitialize') // stage 0
-					pipelineStages.remove ('PodInitialize')
-					stagesRemaining.remove ('PodInitialize')
+					// checkout src
+					def scmVars = checkout (scm)
+					def gitEnv = mapToEnv(['GIT_COMMIT': scmVars.GIT_COMMIT, 'GIT_BRANCH': scmVars.GIT_BRANCH])
+					withEnv (gitEnv) {
+
+						// set Initialize stage as success
+						onStageSuccess (env.INIT_STAGE_NAME) // init stage
+						pipelineStages.remove (env.INIT_STAGE_NAME)
 
 
-					// iterate stages
-					pipelineStages.keySet().each ({ stageName ->
-						runStage (stageName, pipelineStages[stageName])
-						pipelineStages.remove (stageName)
-						echo (stageName + ': ' + pipelineStages.size().toString())
-					})
-/*
-					// iterate stages
-					pipelineStages.each ({ stageElem ->
-						runStage (stageElem)
-						stagesRemaining.remove (stageElem.key)
-					})*/
+						// iterate stages
+						pipelineStages.keySet().each ({ stageName ->
+
+							runStage (stageName, pipelineStages[stageName])
+							pipelineStages.remove (stageName) // remove from pending list
+						})
+					}
 				}
 			}
 
 
-			// notify slack - job succeeded
-			callIfExist ('slackSend',
-				[
-					color: 'good',
-					message: "[${env.BUILD_TIME_STR}] Job Succeeded" + """
-"""						+ "- ${env.JOB_NAME} "
-						+ "(${(env.BRANCH_NAME != null) ? (env.BRANCH_NAME + '/') : ('')}"
-						+ "${env.BUILD_NUMBER})" + """
-"""						+ "(Link: ${env.RUN_DISPLAY_URL})"
-				]
-			)
+			
+		} catch (error) { // if any error occurred during stage run
 
-		} catch (error) {
-
-			// set Pod Initialize stage as failed, if not finished
-			if ( stagesRemaining.contains('PodInitialize') ) {
-				onStageFailure ('PodInitialize')
-				stagesRemaining.remove ('PodInitialize')
+			// if Initialize stage not finished at the time error occurred, set it as failed
+			if ( pipelineStages[env.INIT_STAGE_NAME] != null ) {
+				onStageFailure (env.INIT_STAGE_NAME)
+				pipelineStages.remove (env.INIT_STAGE_NAME)
 			}
 
-			// notify all remaining gitlab stages as canceled
-			stagesRemaining.each ({ stageName ->
-				callIfExist ('updateGitlabCommitStatus',
-					[name: env."GITLABSTAGE__${stageName}", state: 'canceled'])
-			})
+			// set all remaining stages as canceled
+			pipelineStages.each ({ stageName, stageCode -> onStageCancel(stageName) })
 
 			throw (error)
 		}
 
+		// notify slack - job succeeded
+		slackSendWrapper ("- Job Succeeded!\n", 'good')
 
-	} // withEnv
+	} } // nested withEnv
+
 }
-
 
 
 
 
 // exec main
-withEnv ( mapToEnv(localEnv) ) {
-	main ()
-}
+main ()
