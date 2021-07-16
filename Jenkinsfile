@@ -13,7 +13,7 @@
  ***************************************************/
 
 // get constant env vars
-def getConstEnv () { return ( mapToEnv([
+def getConstEnv () { return ([
 
 
 	// gradle config
@@ -28,20 +28,21 @@ def getConstEnv () { return ( mapToEnv([
 	PRIVATE_REG_CRED_ID: 'inner-private-registry-cred', // Jenkins credential
 
 
+	// init stage name
+	INIT_STAGE_NAME: 'Initialize',
+
 	// newline char
 	NLCHAR: '''
 ''',
 
-	// init stage name
-	INIT_STAGE_NAME: 'Initialize',
-
-
-]) ) }
+]) }
 
 
 // convert map to withEnv arguments
-def mapToEnv (map) {
-	return ( map.collect({ key, value -> "${key}=${value}" }) )
+def withEnvMap (map, innerCode) {
+	withEnv ( map.collect({ key, value -> "${key}=${value}" }) ) {
+		innerCode ()
+	}
 }
 
 
@@ -81,7 +82,7 @@ def getPodTemplateInfo () { return ([
 	],
 
 
-])}
+]) }
 
 
 
@@ -422,7 +423,7 @@ def getSlackEnv () {
 	
 
 	// SLACK_MSG_CH, SLACK_MSG_TS
-	withEnv (mapToEnv(buildStartTimeEnv)) {
+	withEnvMap (buildStartTimeEnv) {
 		def slackRes = slackSendWrapper (slackStateEmoji(null) + " Job Triggered")
 		returnEnv.putAll ([
 			SLACK_MSG_CH: slackRes.channelId,
@@ -431,7 +432,7 @@ def getSlackEnv () {
 	}
 
 
-	return (mapToEnv(returnEnv))
+	return (returnEnv)
 }
 
 
@@ -509,7 +510,7 @@ def getGitlabEnv () {
 	})
 	
 
-	return (mapToEnv(returnEnv))
+	return (returnEnv)
 }
 
 
@@ -524,8 +525,8 @@ def getGitlabEnv () {
 
 def main () {
 
-	withEnv (getConstEnv()) {
-		withEnv( getSlackEnv() + getGitlabEnv() ) {
+	withEnvMap (getConstEnv()) {
+		withEnvMap ( getSlackEnv() + getGitlabEnv() ) {
 
 
 			// git env vars - filled after checkout
@@ -559,11 +560,11 @@ def main () {
 
 						// checkout src
 						def scmVars = checkout (scm)
-						gitEnv = mapToEnv([
+						gitEnv = [
 							'GIT_COMMIT': scmVars.GIT_COMMIT,
 							'GIT_BRANCH': scmVars.GIT_BRANCH,
-						])
-						withEnv (gitEnv) {
+						]
+						withEnvMap (gitEnv) {
 
 							// set Initialize stage as passed
 							onStagePassed (initStageElem)
@@ -588,7 +589,7 @@ def main () {
 				
 			} catch (error) { // if any error occurred during stage run
 
-				withEnv (gitEnv) {
+				withEnvMap (gitEnv) {
 
 					// set all non-finished stages as finished
 					pipelineStages.each ({ stageElem ->
@@ -614,8 +615,8 @@ def main () {
 				}
 			}
 
-		} // withEnv
-	} // withEnv
+		} // withEnvMap
+	} // withEnvMap
 
 }
 
