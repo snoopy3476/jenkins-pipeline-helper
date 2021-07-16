@@ -405,6 +405,38 @@ def callIfExist (func, args, bodyCode=null) {
 
 
 
+/***** Git ****/
+
+
+// get git specific env
+def getGitEnv () {
+	def returnEnv = [:]
+
+
+	// GIT_BRANCH_COUNT
+	returnEnv.put ('GIT_BRANCH_COUNT', scm.branches.size())
+
+
+	// GIT_BRANCH__*
+	def gitBranchEnvStr = ""
+	(0..<returnEnv['GIT_BRANCH_COUNT']).each ({ idx ->
+		gitBranchEnvStr += (idx ? ' ' : '') + scm.branches[idx].name
+		returnEnv.put (
+			"GIT_BRANCH__${idx}",
+			scm.branches[idx].name
+                )
+        })
+	returnEnv.put ('GIT_BRANCH', gitBranchEnvStr)
+
+
+	return (returnEnv)
+}
+
+
+
+
+
+
 /***** Slack *****/
 
 
@@ -415,15 +447,14 @@ def getSlackEnv () {
 
 	// SLACK_BUILD_TIME_TS, SLACK_BUILD_TIME_STR
 	def buildDate = (new Date())
-	def buildStartTimeEnv = [
+	returnEnv.putAll ([
 		SLACK_BUILD_TIME_TS: (Long) (buildDate.getTime() / 1000),
 		SLACK_BUILD_TIME_STR: buildDate.toString(),
-	]
-	returnEnv.putAll (buildStartTimeEnv)
+	])
 	
 
 	// SLACK_MSG_CH, SLACK_MSG_TS
-	withEnvMap (buildStartTimeEnv) {
+	withEnvMap (returnEnv) {
 		def slackRes = slackSendWrapper (slackStateEmoji(null) + " Job Triggered")
 		returnEnv.putAll ([
 			SLACK_MSG_CH: slackRes.channelId,
@@ -525,12 +556,9 @@ def getGitlabEnv () {
 
 def main () {
 
-	withEnvMap (getConstEnv()) {
+	withEnvMap ( getConstEnv() + getGitEnv() ) {
 		withEnvMap ( getSlackEnv() + getGitlabEnv() ) {
 
-
-			// git env vars - filled after checkout
-			def gitEnv = []
 
 			// get pipeline stages
 			def pipelineStages = getPipelineStages().collectEntries ({
@@ -559,29 +587,24 @@ def main () {
 					node ('jenkins-slave-pod') {
 
 						// checkout src
-						def scmVars = checkout (scm)
-						gitEnv = [
-							'GIT_COMMIT': scmVars.GIT_COMMIT,
-							'GIT_BRANCH': scmVars.GIT_BRANCH,
-						]
-						withEnvMap (gitEnv) {
+						checkout (scm)
 
-							// set Initialize stage as passed
-							onStagePassed (initStageElem)
+						// set Initialize stage as passed
+						onStagePassed (initStageElem)
 
 
-							// iterate stages
-							pipelineStages.each ({ stageElem ->
-								runStage (stageElem)
-							})
+						// iterate stages
+						pipelineStages.each ({ stageElem ->
+							runStage (stageElem)
+						})
 
 
-							// notify slack - job passed
-							slackSendWrapper (
-								slackStateEmoji(StageState.Passed)
-								+ " Job Passed", 'good'
-							)
-						}
+						// notify slack - job passed
+						slackSendWrapper (
+							slackStateEmoji(StageState.Passed)
+							+ " Job Passed", 'good'
+						)
+
 					}
 				}
 
@@ -589,7 +612,7 @@ def main () {
 				
 			} catch (error) { // if any error occurred during stage run
 
-				withEnvMap (gitEnv) {
+				//withEnvMap (gitEnv) {
 
 					// set all non-finished stages as finished
 					pipelineStages.each ({ stageElem ->
@@ -612,7 +635,7 @@ def main () {
 
 					throw (error)
 
-				}
+				//}
 			}
 
 		} // withEnvMap
