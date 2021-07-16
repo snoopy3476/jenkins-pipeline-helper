@@ -170,8 +170,8 @@ def getPipelineStages () { return ([
 				)
 			}
 
-		} catch (error) {
-			throw (error)
+		} catch (e) {
+			throw (e)
 		} finally {
 
 			// list of xml file list
@@ -261,7 +261,8 @@ enum StageState {
 	Running (false),
 	Passed (true),
 	Failed (true),
-	Canceled (true)
+	Canceled (true),
+	Aborted (true)
 
 	final finished
 
@@ -354,7 +355,7 @@ def onStageFailed (stageElem) {
 }
 
 
-// run when a stage failed
+// run when a stage canceled
 def onStageCanceled (stageElem) {
 
 	// set stage state
@@ -363,6 +364,23 @@ def onStageCanceled (stageElem) {
 	// notify gitlab
 	callIfExist ('updateGitlabCommitStatus',
 		[name: env."GITLABSTAGE__${stageElem.key}", state: 'canceled'])
+
+}
+
+
+// run when a stage aborted by user
+def onStageAborted (stageElem) {
+
+	// set stage state
+	stageElem.value.state = StageState.Aborted
+
+	// notify gitlab
+	callIfExist ('updateGitlabCommitStatus',
+		[name: env."GITLABSTAGE__${stageElem.key}", state: 'canceled'])
+
+	// notify slack
+	slackSendWrapper (slackEmoji(stageElem.value.state)
+		+ " Stage Aborted by a user! ( ${stageElem.key} )", 'danger')
 
 }
 
@@ -388,7 +406,7 @@ def callIfExist (func, args, bodyCode=null) {
 		} else {
 			return ("$func" (args) { bodyCode() })
 		}
-	} catch (NoSuchMethodError error) { // catch & ignore 'no method found' exception only
+	} catch (NoSuchMethodError e) { // catch & ignore 'no method found' exception only
 		echo ("callIfExist: Method '${func}' not found, skip call")
 		return (null)
 	}
@@ -470,9 +488,11 @@ def slackEmoji (stageState) {
 		case StageState.Passed:
 			return (':white_check_mark:')
 		case StageState.Failed:
-			return (':warning:')
+			return (':x:')
 		case StageState.Canceled:
 			return (':black_square_for_stop:')
+		case StageState.Aborted:
+			return (':no_entry_sign:')
 		default:
 			return (':black_large_square:')
 	}
@@ -558,23 +578,23 @@ def normalRoutine (pipelineStages) {
 		value: pipelineStages[env.POD_INIT_STAGE_NAME]
 	])
 
-	// ready pod
+	// ready pod & run stages in node
 	podTemplate (getPodTemplateInfo()) {
-
-		// set Initialize stage as passed
-		onStagePassed ([
-			key: env.POD_INIT_STAGE_NAME,
-			value: pipelineStages[env.POD_INIT_STAGE_NAME]
-		])
-
-
-		// run stages in node
 		node ('jenkins-slave-pod') {
+
+
+			// set Initialize stage as passed
+			onStagePassed ([
+				key: env.POD_INIT_STAGE_NAME,
+				value: pipelineStages[env.POD_INIT_STAGE_NAME]
+			])
+
 
 			// iterate stages
 			pipelineStages.each ({ stageElem ->
 				runStage (stageElem)
 			})
+
 
 		}
 	}
@@ -583,7 +603,7 @@ def normalRoutine (pipelineStages) {
 
 
 // executed routine when error
-def errorRoutine (pipelineStages) {
+def errorRoutine (e, pipelineStages) {
 
 	// set all non-finished stages as finished
 	pipelineStages.each ({ stageElem ->
@@ -594,9 +614,13 @@ def errorRoutine (pipelineStages) {
 				onStageCanceled (stageElem)
 				break
 
-			// running -> failed
+			// running -> (failed/aborted)
 			case StageState.Running:
-				onStageFailed (stageElem)
+				if (e instanceof InterruptedException) { echo ('Interrupted')
+					onStageAborted (stageElem) // when user stopped
+				} else { echo ('Failed')
+					onStageFailed (stageElem) // when error during stage
+				}
 				break
 
 			default:
@@ -631,9 +655,9 @@ def main () {
 			// run normal routine and if exception catched, run error routine
 			try {
 				normalRoutine (pipelineStages)
-			} catch (error) {
-				errorRoutine (pipelineStages)
-				throw (error)
+			} catch (e) {
+				errorRoutine (e, pipelineStages)
+				throw (e)
 			}
 
 			// notify slack - job passed
