@@ -29,7 +29,7 @@ def getConstEnv () { return ([
 
 
 	// pod init stage name
-	POD_INIT_STAGE_NAME: 'PodInitialize',
+	POD_INIT_STAGE_NAME: 'Pod Initialize',
 
 	// newline char
 	NLCHAR: '''
@@ -100,7 +100,7 @@ def getPipelineStages () { return ([
 
 /***** Checkout Stage *****/
 
-	Checkout: {
+	'Checkout': {
 		checkout (scm)
 	},
 
@@ -108,39 +108,45 @@ def getPipelineStages () { return ([
 
 /***** Build Stage *****/
 
-	Build: {
+	'Build': {
 		container ('build-container') {
 
 			// parallel build
-			parallel ('[0] Actial gradle build': {
+			parallel ([
+				'[0] Actial gradle build': {
 
-				sh (
-					label: 'Gradle Build',
-					script: """
-						./gradlew -g ${env.GRADLE_HOME_PATH} --parallel \\
-							clean build --stacktrace -x test
-					"""
-				)
+					sh (
+						label: 'Gradle Build',
+						script: """
+							./gradlew -g ${env.GRADLE_HOME_PATH} --parallel \\
+								clean build --stacktrace -x test
+						"""
+					)
 
-			}, '[1] Dummy for submodule': {
+				},
 
-				sh (
-					label: 'Dummy Submodule Build',
-					script: """
-						./gradlew -g ${env.GRADLE_HOME_PATH} -v
-					"""
-				)
+				'[1] Dummy for submodule': {
 
-			}, '[2] Dummy for submodule': {
+					sh (
+						label: 'Dummy Submodule Build',
+						script: """
+							./gradlew -g ${env.GRADLE_HOME_PATH} -v
+						"""
+					)
 
-				sh (
-					label: 'Dummy Submodule Build',
-					script: """
-						./gradlew -g ${env.GRADLE_HOME_PATH} -v
-					"""
-				)
+				},
 
-			})
+				'[2] Dummy for submodule': {
+
+					sh (
+						label: 'Dummy Submodule Build',
+						script: """
+							./gradlew -g ${env.GRADLE_HOME_PATH} -v
+						"""
+					)
+
+				},
+			])
 
 		}
 
@@ -157,9 +163,8 @@ def getPipelineStages () { return ([
 
 /***** Test Stage *****/
 
-	Test: {
+	'Test': {
 		try {
-
 			container ('build-container') {
 				sh (
 					label: 'Gradle Parallel Test',
@@ -209,7 +214,7 @@ def getPipelineStages () { return ([
 								+ "Skipped ${res.skipCount}]"
 							)
 						} else {
-							throw (new Exception ("Test failed: '${path}'"))
+							error ("Test failed: '${path}'")
 						}
 
 					}
@@ -229,7 +234,7 @@ def getPipelineStages () { return ([
 
 /***** Push Stage *****/
 
-	Push: {
+	'Push': {
 		container ('push-container') {
 			dockerImg = docker.build (env.DEPLOY_IMG_NAME)
 			docker.withRegistry ("${env.PRIVATE_REG_URL}:${env.PRIVATE_REG_PORT}",
@@ -276,26 +281,26 @@ enum StageState {
 
 
 // run stage with some pre/post jobs for the stage
-def runStage (stageElem) {
+def runStage (stageElem, pipelineStages) {
 
 	// check if finished stage before run
 	if (stageElem.value.state.finished) {
 		return (false)
 	}
 
-	onStageRunning (stageElem)
+	onStageRunning (stageElem, pipelineStages)
 
 	stage (stageElem.key) {
 		(stageElem.value.code) ()
 	}
 
-	onStagePassed (stageElem)
+	onStagePassed (stageElem, pipelineStages)
 	return (true)
 }
 
 
 // run when a stage pending
-def onStagePending (stageElem) {
+def onStagePending (stageElem, pipelineStages) {
 
 	// set stage state
 	stageElem.value.state = StageState.Pending
@@ -308,7 +313,7 @@ def onStagePending (stageElem) {
 
 
 // run when a stage starts to run
-def onStageRunning (stageElem) {
+def onStageRunning (stageElem, pipelineStages) {
 
 	// set stage state
 	stageElem.value.state = StageState.Running
@@ -319,14 +324,15 @@ def onStageRunning (stageElem) {
 
 	// notify slack, if slack is botUser mode (when editing already-sent msg is possible)
 	if (env.SLACK_MSG_TS != null) {
-		slackSendWrapper (slackEmoji(stageElem.value.state)
-			+ " Stage Running... ( ${stageElem.key} )")
+		slackSendWrapper (slackEmoji(stageElem.value.state) + ' Stage Running...' + env.NLCHAR
+			+ env.NLCHAR
+			+ getSlackStageProgressMsg(pipelineStages))
 	}
 }
 
 
 // run when a stage passed
-def onStagePassed (stageElem) {
+def onStagePassed (stageElem, pipelineStages) {
 
 	// set stage state
 	stageElem.value.state = StageState.Passed
@@ -339,7 +345,7 @@ def onStagePassed (stageElem) {
 
 
 // run when a stage failed
-def onStageFailed (stageElem) {
+def onStageFailed (stageElem, pipelineStages) {
 
 	// set stage state
 	stageElem.value.state = StageState.Failed
@@ -349,14 +355,15 @@ def onStageFailed (stageElem) {
 		[name: env."GITLABSTAGE__${stageElem.key}", state: 'failed'])
 
 	// notify slack
-	slackSendWrapper (slackEmoji(stageElem.value.state)
-		+ " Stage *FAILED!* ( ${stageElem.key} )", 'danger')
-
+	slackSendWrapper ( slackEmoji(stageElem.value.state) + ' Job *FAILED*!' + env.NLCHAR
+		+ env.NLCHAR
+		+ getSlackStageProgressMsg(pipelineStages)
+		, 'danger' )
 }
 
 
 // run when a stage canceled
-def onStageCanceled (stageElem) {
+def onStageCanceled (stageElem, pipelineStages) {
 
 	// set stage state
 	stageElem.value.state = StageState.Canceled
@@ -369,7 +376,7 @@ def onStageCanceled (stageElem) {
 
 
 // run when a stage aborted by user
-def onStageAborted (stageElem) {
+def onStageAborted (stageElem, pipelineStages) {
 
 	// set stage state
 	stageElem.value.state = StageState.Aborted
@@ -379,9 +386,10 @@ def onStageAborted (stageElem) {
 		[name: env."GITLABSTAGE__${stageElem.key}", state: 'canceled'])
 
 	// notify slack
-	slackSendWrapper (slackEmoji(stageElem.value.state)
-		+ " Stage Aborted by a user! ( ${stageElem.key} )", 'danger')
-
+	slackSendWrapper ( slackEmoji(stageElem.value.state) + ' Job Aborted!' + env.NLCHAR
+		+ env.NLCHAR
+		+ getSlackStageProgressMsg(pipelineStages)
+		, 'warning' )
 }
 
 
@@ -484,51 +492,63 @@ def slackEmoji (stageState) {
 		case StageState.Pending:
 			return (':double_vertical_bar:')
 		case StageState.Running:
-			return (':arrow_forward:')
+			return (':arrow_down:')
 		case StageState.Passed:
 			return (':white_check_mark:')
 		case StageState.Failed:
 			return (':x:')
 		case StageState.Canceled:
-			return (':black_square_for_stop:')
-		case StageState.Aborted:
-			return (':no_entry_sign:')
-		default:
 			return (':black_large_square:')
+		case StageState.Aborted:
+			return (':black_square_for_stop:')
+		default:
+			return (':small_orange_diamond:')
 	}
 }
 
 
 // get slack msg header
-def getSlackMsgHeader () {
-	return (
-		(
-			env.SLACK_BUILD_TIME_TS != null ?
-			"[<!date^${env.SLACK_BUILD_TIME_TS}^{date_short_pretty} {time_secs}|"
-				+ "${env.SLACK_BUILD_TIME_STR}>] " :
-			""
-		)
-		+ "<${env.RUN_DISPLAY_URL}|"
-			+ "${env.JOB_NAME} (${env.BUILD_NUMBER}"
-			+ (env.GIT_BRANCH != null ? ": ${env.GIT_BRANCH}" : "")
-		+ ")>" + env.NLCHAR
+def getSlackMsgHeader () { return (
+	(
+		env.SLACK_BUILD_TIME_TS != null ?
+		"[<!date^${env.SLACK_BUILD_TIME_TS}^{date_short_pretty} {time_secs}|"
+			+ "${env.SLACK_BUILD_TIME_STR}>] " :
+		""
 	)
+	+ "<${env.RUN_DISPLAY_URL}|"
+		+ "${env.JOB_NAME} (${env.BUILD_NUMBER}"
+		+ (env.GIT_BRANCH != null ? ": ${env.GIT_BRANCH}" : "")
+	+ ")>" + env.NLCHAR
+) }
+
+
+
+// get slack stage msg
+def getSlackStageProgressMsg (pipelineStages) {
+	def returnStr = '===== Stage Progress =====' + env.NLCHAR
+	pipelineStages.each ({ stageName, stageElemVal ->
+		// bold stageName if running
+		stageNameSlack = (
+			stageElemVal.state == StageState.Running ?
+			"*${stageName}*" :
+			"${stageName}"
+		)
+		returnStr += "${slackEmoji(stageElemVal.state)} ${stageNameSlack}" + env.NLCHAR
+	})
+	return (returnStr)
 }
+
 
 
 // slack send
-def slackSendWrapper (msg, msgColor=null) {
-
-	return (
-		callIfExist ('slackSend', [
-			channel: env.SLACK_MSG_CH,
-			timestamp: env.SLACK_MSG_TS,
-			message: getSlackMsgHeader() + msg,
-			color: msgColor
-		])
-	)
-
-}
+def slackSendWrapper (msg, msgColor=null) { return (
+	callIfExist ('slackSend', [
+		channel: env.SLACK_MSG_CH,
+		timestamp: env.SLACK_MSG_TS,
+		message: getSlackMsgHeader() + msg,
+		color: msgColor
+	])
+) }
 
 
 
@@ -570,13 +590,13 @@ def getGitlabEnv (pipelineStages) {
 def normalRoutine (pipelineStages) {
 
 	// set all stages as pending stages
-	pipelineStages.each ({ stageElem -> onStagePending(stageElem) })
+	pipelineStages.each ({ stageElem -> onStagePending(stageElem, pipelineStages) })
 
 	// set Initialize stage as running
 	onStageRunning ([
 		key: env.POD_INIT_STAGE_NAME,
 		value: pipelineStages[env.POD_INIT_STAGE_NAME]
-	])
+	], pipelineStages)
 
 	// ready pod & run stages in node
 	podTemplate (getPodTemplateInfo()) {
@@ -587,12 +607,12 @@ def normalRoutine (pipelineStages) {
 			onStagePassed ([
 				key: env.POD_INIT_STAGE_NAME,
 				value: pipelineStages[env.POD_INIT_STAGE_NAME]
-			])
+			], pipelineStages)
 
 
 			// iterate stages
 			pipelineStages.each ({ stageElem ->
-				runStage (stageElem)
+				runStage (stageElem, pipelineStages)
 			})
 
 
@@ -605,26 +625,23 @@ def normalRoutine (pipelineStages) {
 // executed routine when error
 def errorRoutine (e, pipelineStages) {
 
-	// set all non-finished stages as finished
+	// set all non-finished stages as finished //
+
+	// pending -> canceled
 	pipelineStages.each ({ stageElem ->
-		switch (stageElem.value.state) {
+		if (stageElem.value.state == StageState.Pending) {
+			onStageCanceled (stageElem, pipelineStages)
+		}
+	})
 
-			// pending -> canceled
-			case StageState.Pending:
-				onStageCanceled (stageElem)
-				break
-
-			// running -> (failed/aborted)
-			case StageState.Running:
-				if (e instanceof InterruptedException) { echo ('Interrupted')
-					onStageAborted (stageElem) // when user stopped
-				} else { echo ('Failed')
-					onStageFailed (stageElem) // when error during stage
-				}
-				break
-
-			default:
-				break
+	// running -> (failed/aborted)
+	pipelineStages.each ({ stageElem ->
+		if (stageElem.value.state == StageState.Running) {
+			if (e instanceof InterruptedException) { echo ('Interrupted')
+				onStageAborted (stageElem, pipelineStages) // when user stopped
+			} else { echo ('Failed')
+				onStageFailed (stageElem, pipelineStages) // when error during stage
+			}
 		}
 	})
 
