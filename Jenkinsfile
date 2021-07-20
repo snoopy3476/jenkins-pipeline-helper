@@ -12,12 +12,17 @@
  *                                                 *
  ***************************************************/
 
-// get constant env vars
-def constEnv () { [
+
+/**
+ *   Get base env vars
+ *
+ *       @return    Immutable Map of env vars
+ */
+Map stageEnv () { immutableMap ( [
 
 	// gradle config
-	GRADLE_HOME_PATH: '/home/jenkins/.gradle',
-	GRADLE_LOCAL_CACHE_PATH: '/tmp/jenkins/.gradle',
+	GRADLE_HOME_PATH: '/home/jenkins/.gradle', // path in containers
+	GRADLE_LOCAL_CACHE_PATH: '/tmp/jenkins/.gradle', // path of host machine
 
 	// docker private registry config
 	PRIVATE_REG_URL: 'https://k8s-docker-registry',
@@ -26,35 +31,15 @@ def constEnv () { [
 	DEPLOY_IMG_TAG: 'build-' + env.BUILD_NUMBER,
 	PRIVATE_REG_CRED_ID: 'inner-private-registry-cred', // Jenkins credential
 
-
-	// pod init stage name
-	POD_INIT_STAGE_NAME: 'Pod Initialize',
-
-	// newline char
-	NLCHAR: '''
-''',
-
-].asImmutable() }
+] ) }
 
 
-// convert map to withEnv arguments
-def withEnvMap (envMap, innerCode) {
-	withEnv ( envMap.collect({ key, value -> "${key}=${value}" }) ) {
-		innerCode ()
-	}
-}
-
-
-
-
-
-/***************************************************
- *                                                 *
- *                [ Pod Template ]                 *
- *                                                 *
- ***************************************************/
-
-def podTemplateArgs () { [
+/**
+ *   Get podTemplate args
+ *
+ *       @return    Immutable Map of podtemplate arguments
+ */
+Map podTemplateArgs () { immutableMap ( [
 
 	label: 'jenkins-slave-pod', 
 	containers: [
@@ -81,7 +66,7 @@ def podTemplateArgs () { [
 	],
 
 
-].asImmutable() }
+] ) }
 
 
 
@@ -89,17 +74,25 @@ def podTemplateArgs () { [
 
 /***************************************************
  *                                                 *
- *                   [ Stages ]                    *
+ *                  [ Pipeline ]                   *
  *                                                 *
  ***************************************************/
 
-def pipelineStages () { [
+
+/**
+ *   Get pipeline data
+ *
+ *       @return    Map of [(stageName): (stageClosure)]
+ */
+Map pipelineData () { immutableMap ( [
+
+	PodInitialize: { assert(false) }, // dummy entry for init stage: should not be removed
 
 
 
 /***** Checkout Stage *****/
 
-	'Checkout': {
+	Checkout: {
 		checkout (scm)
 	},
 
@@ -107,7 +100,7 @@ def pipelineStages () { [
 
 /***** Build Stage *****/
 
-	'Build': {
+	Build: {
 		container ('build-container') {
 
 			// parallel build
@@ -126,23 +119,51 @@ def pipelineStages () { [
 
 				'[1] Dummy for submodule': {
 
-					sh (
-						label: 'Dummy Submodule Build',
-						script: """
-							./gradlew -g ${env.GRADLE_HOME_PATH} -v
-						"""
-					)
+					stage ('SubDummy 1') {
+						sh (
+							label: 'Dummy Submodule Build - 1',
+							script: """
+								./gradlew -g ${env.GRADLE_HOME_PATH} -v
+							"""
+						)
+					}
+					stage ('SubDummy 2') {
+						sh (
+							label: 'Dummy Submodule Build - 2',
+							script: """
+								./gradlew -g ${env.GRADLE_HOME_PATH} -v
+							"""
+						)
+					}
 
 				},
 
 				'[2] Dummy for submodule': {
 
-					sh (
-						label: 'Dummy Submodule Build',
-						script: """
-							./gradlew -g ${env.GRADLE_HOME_PATH} -v
-						"""
-					)
+					stage ('SubDummy 1') {
+						sh (
+							label: 'Dummy Submodule Build - 1',
+							script: """
+								./gradlew -g ${env.GRADLE_HOME_PATH} -v
+							"""
+						)
+					}
+					stage ('SubDummy 2') {
+						sh (
+							label: 'Dummy Submodule Build - 2',
+							script: """
+								./gradlew -g ${env.GRADLE_HOME_PATH} -v
+							"""
+						)
+					}
+					stage ('SubDummy 3') {
+						sh (
+							label: 'Dummy Submodule Build - 3',
+							script: """
+								./gradlew -g ${env.GRADLE_HOME_PATH} -v
+							"""
+						)
+					}
 
 				},
 			])
@@ -151,7 +172,6 @@ def pipelineStages () { [
 
 		// archive built results
 		archiveArtifacts (
-			label: 'Archiving Artifacts',
 			artifacts: 'build/libs/**/*.jar, build/libs/**/*.war',
 			fingerprint: true
 		)
@@ -162,7 +182,7 @@ def pipelineStages () { [
 
 /***** Test Stage *****/
 
-	'Test': {
+	Test: {
 		try {
 			container ('build-container') {
 				sh (
@@ -179,7 +199,7 @@ def pipelineStages () { [
 		} finally {
 
 			// list of xml file list
-			junitXmlList =
+			def junitXmlList =
 				sh (
 					label: 'Getting Junit Xml List',
 					returnStdout: true,
@@ -192,17 +212,15 @@ def pipelineStages () { [
 				).readLines().sort()
 
 			// list of parallel jobs
-			junitParallelSteps = [:]
-			junitXmlList.eachWithIndex ({ path, idx ->
+			def junitParallelSteps = [:]
+			junitXmlList.eachWithIndex { String path, int idx ->
 
 				// get file basename
 				def posFrom = path.lastIndexOf ('/') + 1 // no occurence: 0
 				def posTo = path.lastIndexOf ('.')
 				def basename = path.substring (posFrom, posTo)
 
-				junitParallelSteps.put (
-					"[${idx}] ${basename}",
-					{
+				junitParallelSteps << [ "[${idx}] ${basename}": {
 						def res = junit (path)
 						if (res.failCount == 0) {
 							echo (
@@ -216,9 +234,8 @@ def pipelineStages () { [
 							error ("Test failed: '${path}'")
 						}
 
-					}
-				)
-			})
+					} ]
+			}
 
 			// execute parallel junit jobs
 			if (junitParallelSteps.size() > 0) {
@@ -233,7 +250,7 @@ def pipelineStages () { [
 
 /***** Push Stage *****/
 
-	'Push': {
+	Push: {
 		container ('push-container') {
 			dockerImg = docker.build (env.DEPLOY_IMG_NAME)
 			docker.withRegistry ("${env.PRIVATE_REG_URL}:${env.PRIVATE_REG_PORT}",
@@ -245,8 +262,9 @@ def pipelineStages () { [
 	}
 
 
-].asImmutable() }
 
+
+] ) } // end of pipelineData ()
 
 
 
@@ -254,142 +272,267 @@ def pipelineStages () { [
 
 /***************************************************
  *                                                 *
- *              [ Stage Processing ]               *
+ *             [ Pipeline Processing ]             *
  *                                                 *
  ***************************************************/
 
-// describe state of stages
+
+
+
+/**
+ *   Get stagename env vars - STAGE*
+ *
+ *       @return    Immutable Map of env vars
+ */
+Map pipelineEnv () { withVar((newPipeline() ?: null), {it}) { List<Map> curPipeline -> immutableMap (
+
+	// STAGENAME__*
+	curPipeline.collectEntries { Map stageElem -> [
+		"STAGENAME__${stageElem.stageName}":
+			"${curPipeline.indexOf(stageElem)}. ${stageElem.stageName}",
+	] }
+
+	+
+
+	// STAGENEXT__*
+	[ "STAGENEXT__": curPipeline?.get(0).stageName ] // next stage of head: first stage
+	+
+	curPipeline?.tail()?.collectEntries { Map stageElem -> [
+		"STAGENEXT__${curPipeline[curPipeline.indexOf(stageElem)-1].stageName}":
+			"${stageElem.stageName}",
+	] }
+
+) } ?: [:] } // return empty map if null
+
+
+/**
+ *   Create new pipeline
+ *
+ *       @return    Pipeline
+ */
+List newPipeline () { pipelineData().collect { key, value ->
+	immutableMap ([stageName: key, stageClosure: value])
+} }
+
+
+/**
+ *   Run pipeline
+ *
+ *       @return    (null)
+ */
+void runPipeline (List<Map> curPipeline) {
+
+	// pipeline first elem as curStage, only when not null/empty
+	withVar (
+		(curPipeline ?: null)?.get(0),
+	        { it?.stageName && it?.stageClosure instanceof Closure }
+	) { Map curStage ->
+
+		try {
+			// run stage
+			onStageRunning (curStage.stageName)
+			stage (curStage.stageName) {
+				curStage.stageClosure.call()
+			}
+			onStagePassed (curStage.stageName)
+
+		} catch (e) {
+
+			// process error
+			if (e instanceof InterruptedException) {
+				onStageAborted (curStage.stageName)
+			} else {
+				onStageFailed (curStage.stageName)
+			}
+
+			throw (e)
+		}
+
+		// run next stage, creating new pipeline starting from it
+		runPipeline ( curPipeline.tail() )
+	}
+}
+
+
+
+
+
+/**
+ *   Describe state of stages
+ */
 enum StageState {
 
-	Pending (false),
-	Running (false),
-	Passed (true),
-	Failed (true),
-	Canceled (true),
-	Aborted (true)
+	None, Pending, Running, Passed, Failed, Canceled, Aborted
 
-	final finished
+	public StageState () {}
 
-	public StageState (finished) {
-		this.finished = finished
+	public getNextState () {
+		switch (this) {
+			case StageState.Pending:
+				return (StageState.Pending)
+			case StageState.Running:
+				return (StageState.Pending)
+			case StageState.Passed:
+				return (StageState.Pending)
+			case StageState.Failed:
+				return (StageState.Canceled)
+			case StageState.Canceled:
+				return (StageState.Canceled)
+			case StageState.Aborted:
+				return (StageState.Canceled)
+			default:
+				return (StageState.None)
+		}
 	}
 }
 
 
+/**
+ *   Run when a stage starts to run
+ */
+void onStageRunning (String stageName) {
+
+	if (! stageName?.length()) { return (null) } // exit if null/empty
 
 
+	// notify gitlab //
 
-// run stage with some pre/post jobs for the stage
-def runStage (stageElem, pipelineStagesMap) {
-
-	// check if finished stage before run
-	if (stageElem.value.state.finished) {
-		return (false)
-	}
-
-	onStageRunning (stageElem, pipelineStagesMap)
-
-	stage (stageElem.key) {
-		(stageElem.value.code) ()
-	}
-
-	onStagePassed (stageElem, pipelineStagesMap)
-	return (true)
-}
-
-
-// run when a stage pending
-def onStagePending (stageElem, pipelineStagesMap) {
-
-	// set stage state
-	stageElem.value.state = StageState.Pending
-
-	// notify gitlab
+	// notify current stage as running
 	callIfExist ('updateGitlabCommitStatus',
-		[name: env."GITLABSTAGE__${stageElem.key}", state: 'pending'])
+		[name: env."STAGENAME__${stageName}", state: 'running'])
 
-}
+	// notify stages after curent stage as pending
+	runWithStagenames (stageName) { String stageNameArg ->
+		callIfExist ('updateGitlabCommitStatus',
+			[name: env."STAGENAME__${stageNameArg}", state: 'pending'])
+	}
 
 
-// run when a stage starts to run
-def onStageRunning (stageElem, pipelineStagesMap) {
+	// notify slack // (if slack is botUser mode)
 
-	// set stage state
-	stageElem.value.state = StageState.Running
-
-	// notify gitlab
-	callIfExist ('updateGitlabCommitStatus',
-		[name: env."GITLABSTAGE__${stageElem.key}", state: 'running'])
-
-	// notify slack, if slack is botUser mode (when editing already-sent msg is possible)
 	if (env.SLACK_MSG_TS != null) {
-		slackSendWrapper (slackEmoji(stageElem.value.state) + ' Stage Running...' + env.NLCHAR
-			+ env.NLCHAR
-			+ slackStageProgressMsg(pipelineStagesMap))
+		slackSendWrapper (
+			slackEmoji(StageState.Running) + ' Stage Running...' + env.NLCHAR
+				+ slackStageProgressMsg (stageName)
+		)
 	}
 }
 
 
-// run when a stage passed
-def onStagePassed (stageElem, pipelineStagesMap) {
+/**
+ *   Run when a stage passed
+ */
+void onStagePassed (String stageName) {
 
-	// set stage state
-	stageElem.value.state = StageState.Passed
+	if (! stageName?.length()) { return (null) } // exit if null/empty
 
-	// notify gitlab
+
+	// notify gitlab //
+
 	callIfExist ('updateGitlabCommitStatus',
-		[name: env."GITLABSTAGE__${stageElem.key}", state: 'success'])
+		[name: env."STAGENAME__${stageName}", state: 'success'])
 
 }
 
 
-// run when a stage failed
-def onStageFailed (stageElem, pipelineStagesMap) {
+/**
+ *   Run when a stage failed
+ */
+void onStageFailed (String stageName) {
 
-	// set stage state
-	stageElem.value.state = StageState.Failed
+	if (! stageName?.length()) { return (null) } // exit if null/empty
 
-	// notify gitlab
+
+	// notify gitlab //
+
+	// notify current stage as failed
 	callIfExist ('updateGitlabCommitStatus',
-		[name: env."GITLABSTAGE__${stageElem.key}", state: 'failed'])
+		[name: env."STAGENAME__${stageName}", state: 'failed'])
 
-	// notify slack
-	slackSendWrapper ( slackEmoji(stageElem.value.state) + ' Job *FAILED*!' + env.NLCHAR
-		+ env.NLCHAR
-		+ slackStageProgressMsg(pipelineStagesMap)
-		, 'danger' )
+	// notify stages after curent stage as canceled
+	runWithStagenames (stageName) { String stageNameArg ->
+		callIfExist ('updateGitlabCommitStatus',
+			[name: env."STAGENAME__${stageNameArg}", state: 'canceled'])
+	}
+
+
+	// notify slack //
+
+	slackSendWrapper (
+		slackEmoji(StageState.Failed) + ' Job *FAILED*!' + env.NLCHAR
+			+ slackStageProgressMsg (stageName, StageState.Failed)
+		, 'danger'
+	)
 }
 
 
-// run when a stage canceled
-def onStageCanceled (stageElem, pipelineStagesMap) {
+/**
+ *   Run when a stage aborted by user
+ */
+void onStageAborted (String stageName) {
 
-	// set stage state
-	stageElem.value.state = StageState.Canceled
+	if (! stageName?.length()) { return (null) } // exit if null/empty
 
-	// notify gitlab
+
+	// notify gitlab //
+
+	// notify current stage as failed
 	callIfExist ('updateGitlabCommitStatus',
-		[name: env."GITLABSTAGE__${stageElem.key}", state: 'canceled'])
+		[name: env."STAGENAME__${stageName}", state: 'canceled'])
 
+	// notify stages after curent stage as canceled
+	runWithStagenames (stageName) { String stageNameArg ->
+		callIfExist ('updateGitlabCommitStatus',
+			[name: env."STAGENAME__${stageNameArg}", state: 'canceled'])
+	}
+
+
+	// notify slack //
+
+	slackSendWrapper (
+		slackEmoji(StageState.Aborted) + ' Job Aborted!' + env.NLCHAR
+			+ slackStageProgressMsg (stageName, StageState.Aborted)
+		, 'warning'
+	)
 }
 
 
-// run when a stage aborted by user
-def onStageAborted (stageElem, pipelineStagesMap) {
 
-	// set stage state
-	stageElem.value.state = StageState.Aborted
 
-	// notify gitlab
-	callIfExist ('updateGitlabCommitStatus',
-		[name: env."GITLABSTAGE__${stageElem.key}", state: 'canceled'])
 
-	// notify slack
-	slackSendWrapper ( slackEmoji(stageElem.value.state) + ' Job Aborted!' + env.NLCHAR
-		+ env.NLCHAR
-		+ slackStageProgressMsg(pipelineStagesMap)
-		, 'warning' )
+/**
+ *   Run closure, using each stage name as arg,
+ *   for all stages after 'stageNameStart' sequentially (before 'stageNameStop').
+ *   Argument stages are not included in runlist: Ex) 'stageNameStart'(X) > midStage1(O) > 'stageNameStop'(X)
+ *
+ *       @param     stageNameStart    Stage to start from. If '' (empty str), then start from first stage
+ *       @param     stageNameStop     Stage to stop at. If null, then run all stages after 'stageNameStart'
+ *       @return                      Map of [(stageName): (return value of stageName)]
+ */
+LinkedHashMap runWithStagenames (String stageNameStart, String stageNameStop = null, Closure closure) {
+
+	if (
+		stageNameStart != null
+		&& (env."STAGENEXT__${stageNameStart}")?.length() // not end of pipeline
+		&& env."STAGENEXT__${stageNameStart}" != stageNameStop // next stage: stopstage
+	) {
+		return (
+			[
+				(env."STAGENEXT__${stageNameStart}"):
+					closure (env."STAGENEXT__${stageNameStart}") // ret of closure
+			]
+			+ runWithStagenames (
+				env."STAGENEXT__${stageNameStart}",
+				stageNameStop,
+				closure
+			) // recursive
+		)
+	} else {
+		return ([:])
+	}
+
 }
+
 
 
 
@@ -405,19 +548,41 @@ def onStageAborted (stageElem, pipelineStagesMap) {
 /***** Common *****/
 
 
-// call plugin method if exists
-def callIfExist (func, args, bodyCode=null) {
+/**
+ *   Call plugin method if exists
+ *
+ *       @return    Return value of func
+ */
+def callIfExist (String func, Map args = null, Closure bodyClosure = null) {
+
+	if (! func?.length()) { return (null) } // return null if func name is null/empty
+
 	try {
-		if (bodyCode == null) {
+		if (bodyClosure == null) {
 			return ("$func" (args))
 		} else {
-			return ("$func" (args) { bodyCode() })
+			return ("$func" (args) { bodyClosure() })
 		}
+
 	} catch (NoSuchMethodError e) { // catch & ignore 'no method found' exception only
 		echo ("callIfExist: Method '${func}' not found, skip call")
 		return (null)
 	}
 }
+
+
+/**
+ *   Get base env vars
+ *
+ *       @return    Immutable Map of env vars
+ */
+Map baseEnv () { immutableMap ( [
+
+	// newline char
+	NLCHAR: '''
+''',
+
+] ) }
 
 
 
@@ -426,30 +591,17 @@ def callIfExist (func, args, bodyCode=null) {
 /***** Git ****/
 
 
-// get git specific env
-def gitEnv () {
-	def returnEnv = [:]
+/**
+ *   Get git specific env
+ *
+ *       @return    Immutable Map of env vars
+ */
+Map gitEnv () { immutableMap ( [
 
+	'GIT_BRANCH__COUNT': scm?.branches?.size(),
+	'GIT_BRANCH': String.join(' ', scm?.branches?.collect { elem -> elem.name })
 
-	// GIT_BRANCH_COUNT
-	returnEnv.put ('GIT_BRANCH_COUNT', scm.branches.size())
-
-
-	// GIT_BRANCH__*
-	def gitBranchEnvStr = ""
-	(0..<returnEnv['GIT_BRANCH_COUNT']).each ({ idx ->
-		gitBranchEnvStr += (idx ? ' ' : '') + scm.branches[idx].name
-		returnEnv.put (
-			"GIT_BRANCH__${idx}",
-			scm.branches[idx].name
-                )
-        })
-	returnEnv.put ('GIT_BRANCH', gitBranchEnvStr)
-
-
-	return (returnEnv)
-}
-
+] ) }
 
 
 
@@ -458,35 +610,27 @@ def gitEnv () {
 /***** Slack *****/
 
 
-// get slack specific env
-def slackEnv (slackSendRes) {
-	def returnEnv = [:]
+/**
+ *   Get slack specific env
+ *
+ *       @return    Immutable Map of env vars
+ */
+Map slackEnv (slackResponse) { immutableMap ( [
+
+	SLACK_BUILD_TIME_STR: (new Date()).toString(),
+	SLACK_MSG_CH: slackResponse?.channelId,
+	SLACK_MSG_TS: slackResponse?.ts,
+
+] ) }
 
 
-	// SLACK_BUILD_TIME_TS, SLACK_BUILD_TIME_STR
-	def buildDate = (new Date())
-	returnEnv.putAll ([
-		SLACK_BUILD_TIME_TS: (Long) (buildDate.getTime() / 1000),
-		SLACK_BUILD_TIME_STR: buildDate.toString(),
-	])
-	
+/**
+ *   Get slack emoji for a stage state
+ *
+ *       @return    String of slack emoji for the state
+ */
+String slackEmoji (StageState stageState = StageState.None) {
 
-	// SLACK_MSG_CH, SLACK_MSG_TS
-	withEnvMap (returnEnv) {
-		returnEnv.putAll ([
-			SLACK_MSG_CH: slackSendRes.channelId,
-			SLACK_MSG_TS: slackSendRes.ts,
-		])
-	}
-
-
-	return (returnEnv.asImmutable())
-}
-
-
-
-// get slack emoji for a stage state
-def slackEmoji (stageState) {
 	switch (stageState) {
 		case StageState.Pending:
 			return (':double_vertical_bar:')
@@ -506,73 +650,152 @@ def slackEmoji (stageState) {
 }
 
 
-// get slack msg header
-def slackMsgHeader () { return (
+/**
+ *   Get slack msg header
+ *
+ *       @return    Slack msg header
+ */
+String slackMsgHeader () { (
+
+	// Leading Timestamp (with slack date format grammar)
+	//   '[TimeStamp]'
 	(
-		env.SLACK_BUILD_TIME_TS != null ?
-		"[<!date^${env.SLACK_BUILD_TIME_TS}^{date_short_pretty} {time_secs}|"
-			+ "${env.SLACK_BUILD_TIME_STR}>] " :
-		""
+		env.SLACK_MSG_TS
+		? "[<!date"
+			+ "^${ env.SLACK_MSG_TS.substring( 0, (env.SLACK_MSG_TS + '.').indexOf('.') ) }" // ts
+			+ "^{date_short_pretty} {time_secs}" // ts format
+			+ "|${env.SLACK_BUILD_TIME_STR}" // alt text
+			+ ">] "
+		: ""
 	)
-	+ "<${env.RUN_DISPLAY_URL}|"
-		+ "${env.JOB_NAME} (${env.BUILD_NUMBER}"
-		+ (env.GIT_BRANCH != null ? ": ${env.GIT_BRANCH}" : "")
-	+ ")>" + env.NLCHAR
+
+	// Link to jenkins job info (with slack link format grammar)
+	//   'jobname (build#: branch)'
+	+(
+		"<"
+		+ "${env.RUN_DISPLAY_URL}" // pipeline page link
+		+ "|${env.JOB_NAME}" // job name
+
+		// build # + branch
+		+(
+			" (${env.BUILD_NUMBER}" // build #
+			+(
+				env.GIT_BRANCH
+				? ": ${env.GIT_BRANCH}" // git branch
+				: ""
+			)
+			+ ")"
+		)
+		+ ">"
+	)
+
+) }
+
+
+/**
+ *   Get slack stage progress msg
+ *
+ *       @return    Slack progress msg
+ */
+String slackStageProgressMsg (String stageName, StageState state = StageState.Running) { String.join (
+
+	env.NLCHAR, (
+
+		// progress msg header
+		['', '===== Stage Progress =====']
+
+		// stage names and their current state
+		+(
+
+			// prev stages (first ~ stageName)
+			runWithStagenames ('', stageName) { String stageNameArg ->
+				"${slackEmoji(StageState.Passed)} " + env."STAGENAME__${stageNameArg}"
+			}
+
+			// current stage
+			+ [(stageName): "${slackEmoji(state)} *" + env."STAGENAME__${stageName}" + "*" ]
+
+			// next stages (stageName ~ last)
+			+ runWithStagenames (stageName) { String stageNameArg ->
+				"${slackEmoji(state.getNextState())} " + env."STAGENAME__${stageNameArg}"
+			}
+
+		).values()
+	)
+
+) }
+
+
+/**
+ *   Slack send
+ *
+ *       @return    SlackSend result values
+ */
+def slackSendWrapper (String msg, String msgColor = null) { callIfExist (
+
+	'slackSend', [
+
+		channel: env.SLACK_MSG_CH,
+		timestamp: env.SLACK_MSG_TS,
+		message: slackMsgHeader() + env.NLCHAR + msg,
+		color: msgColor
+
+	]
 ) }
 
 
 
-// get slack stage msg
-def slackStageProgressMsg (pipelineStagesMap) {
-	def returnStr = '===== Stage Progress =====' + env.NLCHAR
-	pipelineStagesMap.each ({ stageName, stageElemVal ->
-		// bold stageName if running
-		stageNameSlack = (
-			stageElemVal.state == StageState.Running ?
-			"*${stageName}*" :
-			"${stageName}"
-		)
-		returnStr += "${slackEmoji(stageElemVal.state)} ${stageNameSlack}" + env.NLCHAR
-	})
-	return (returnStr)
+
+
+/***************************************************
+ *                                                 *
+ *            [ Script-wide Wrappers ]             *
+ *                                                 *
+ ***************************************************/
+
+/**
+ *   Run closure using var, if pred is true.
+ *
+ *       @param     var        Variable to define
+ *       @param     pred       Predicate for run (boolean/Closure). If true, then run closure
+ *       @param     closure    Closure to run
+ *       @return               Return of closure if pred=true, null if pred=false
+ */
+def withVar (var, pred = true, Closure closure) {
+
+	if (
+		(pred instanceof Closure)
+		? pred (var)
+		: pred
+	) {
+		return (closure (var))
+	} else {
+		return (null)
+	}
+
 }
 
 
-
-// slack send
-def slackSendWrapper (msg, msgColor=null) {
-	callIfExist ('slackSend', [
-		channel: env.SLACK_MSG_CH,
-		timestamp: env.SLACK_MSG_TS,
-		message: slackMsgHeader() + msg,
-		color: msgColor
-	])
-}
-
+/**
+ *   Convert map to env list, and run withEnv
+ *
+ *       @return    Return value of closure
+ */
+def withEnvMap (Map<String,String> envMap, Closure closure) { withEnv (
+	envMap?.collect { key, value -> "${key}=${value}" },
+	closure
+) }
 
 
+/**
+ *   Convert map to unmodifiable map
+ *
+ *       @return    Unmodifiable map
+ */
+def immutableMap (Map input) { Collections.unmodifiableMap (
+	input ?: [:]
+) }
 
-
-/***** GitLab *****/
-
-
-// get gitlab specific env
-def gitlabEnv (pipelineStagesMap) {
-	def returnEnv = [:]
-
-
-	// GITLABSTAGE__*
-	def stageCountMaxDigitLen = pipelineStagesMap.size().toString().length() // 0 pad count
-	pipelineStagesMap.eachWithIndex ({ key, value, idx ->
-		returnEnv.put (
-			"GITLABSTAGE__${key}",
-			"${(idx).toString().padLeft(stageCountMaxDigitLen,'0')}. ${key}"
-		)
-	})
-	
-
-	return (returnEnv.asImmutable())
-}
 
 
 
@@ -584,107 +807,66 @@ def gitlabEnv (pipelineStagesMap) {
  *                                                 *
  ***************************************************/
 
+/**
+ *   Script entry point
+ */
+void main () {
 
-// executed routine when no error
-def normalRoutine (pipelineStagesMap) {
+	// set base env vars before all other works
+	withEnvMap ( baseEnv() ) {
 
-	// set all stages as pending stages
-	pipelineStagesMap.each ({ stageElem -> onStagePending(stageElem, pipelineStagesMap) })
-
-	// set Initialize stage as running
-	onStageRunning ([
-		key: env.POD_INIT_STAGE_NAME,
-		value: pipelineStagesMap[env.POD_INIT_STAGE_NAME]
-	], pipelineStagesMap)
-
-	// ready pod & run stages in node
-	podTemplate (podTemplateArgs()) {
-		node ('jenkins-slave-pod') {
+		// set additional env vars
+		withEnvMap (
+			pipelineEnv ()
+			+ gitEnv ()
+			+ slackEnv ( slackSendWrapper (slackEmoji() + " Job Triggered") ) // with notify slack
+		) {
 
 
-			// set Initialize stage as passed
-			onStagePassed ([
-				key: env.POD_INIT_STAGE_NAME,
-				value: pipelineStagesMap[env.POD_INIT_STAGE_NAME]
-			], pipelineStagesMap)
-
-
-			// iterate stages
-			pipelineStagesMap.each ({ stageElem ->
-				runStage (stageElem, pipelineStagesMap)
-			})
-
-
-		}
-	}
-
-}
-
-
-// executed routine when error
-def errorRoutine (e, pipelineStagesMap) {
-
-	// set all non-finished stages as finished //
-
-	// pending -> canceled
-	pipelineStagesMap.each ({ stageElem ->
-		if (stageElem.value.state == StageState.Pending) {
-			onStageCanceled (stageElem, pipelineStagesMap)
-		}
-	})
-
-	// running -> (failed/aborted)
-	pipelineStagesMap.each ({ stageElem ->
-		if (stageElem.value.state == StageState.Running) {
-			if (e instanceof InterruptedException) { echo ('Interrupted')
-				onStageAborted (stageElem, pipelineStagesMap) // when user stopped
-			} else { echo ('Failed')
-				onStageFailed (stageElem, pipelineStagesMap) // when error during stage
-			}
-		}
-	})
-
-}
-
-
-// script entry point
-def main () {
-
-	withEnvMap ( constEnv() + gitEnv() ) {
-
-
-		// notify slack - job triggered
-		def slackRes = slackSendWrapper (slackEmoji(null) + " Job Triggered")
-
-
-		// get pipeline stages, with adding init stage first
-		def pipelineStagesMap = ( [(env.POD_INIT_STAGE_NAME): null] + pipelineStages() )
-			.collectEntries ({
-				stageName, stageCode ->
-				[ (stageName): [ code: stageCode, state: null ] ]
-			})
-
-
-		// use additional env from above
-		withEnvMap ( slackEnv(slackRes) + gitlabEnv(pipelineStagesMap) ) {
-
-			// run normal routine and if exception catched, run error routine
+			def initStagePassed = false
 			try {
-				normalRoutine (pipelineStagesMap)
+				// set Initialize stage as running
+				onStageRunning ('PodInitialize')
+
+				// ready pod & run stages in node
+				podTemplate (podTemplateArgs()) {
+					node ('jenkins-slave-pod') {
+
+						// set Initialize stage as passed
+						onStagePassed ('PodInitialize')
+						initStagePassed = true
+
+						// run all stages after init stage
+						withEnvMap (stageEnv()) {
+							runPipeline ( (newPipeline() ?: null)?.tail() )
+						}
+					}
+				}
+
+				// notify slack - job passed
+				slackSendWrapper (slackEmoji(StageState.Passed) + " Job Passed", 'good')
+
 			} catch (e) {
-				errorRoutine (e, pipelineStagesMap)
+
+				// set init stage as failed / aborted
+				if (! initStagePassed) {
+					if (e instanceof InterruptedException) {
+						onStageAborted ('PodInitialize')
+					} else {
+						onStageFailed ('PodInitialize')
+					}
+				}
+
 				throw (e)
 			}
 
-			// notify slack - job passed
-			slackSendWrapper (slackEmoji(StageState.Passed) + " Job Passed", 'good')
+
 
 		} // inner withEnvMap
-
-
 	} // withEnvMap
 
 }
+
 
 
 
