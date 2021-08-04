@@ -10,16 +10,22 @@
  ***************************************************/
 
 
-def main () {
-
+/**
+ *   Run example jenkins pipeline using helper
+ */
+void main () {
 	podTemplate (podTemplateArgs()) { node ('jenkins-slave-pod') {
+
+
+
+
 
 		// load scripts //
 
 		checkout ([
 			$class: 'GitSCM',
 			userRemoteConfigs: [[url: 'https://github.com/snoopy3476/jenkins-pipeline-helper']],
-			branches: [[name: '*/release-1.0.0']]
+			branches: [[name: '*/master']]
 		])
 		def pipelineHelper = load ('JenkinsPipelineHelper.groovy')
 		def gitlabCallbacks = load ('SampleCallbacks/GitlabNotification.groovy')
