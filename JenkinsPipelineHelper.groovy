@@ -196,7 +196,7 @@ void onStageCallback (Map<String,List<Closure>> callbackData, String stageState,
 		return (null)
 	}
 
-	echo (" - onStageCallback_${stageState} [${stageIdx+1}/${pipeline.size()}] ('${pipeline[stageIdx].stageDisplayName}')")
+	//echo (" - onStageCallback_${stageState} [${stageIdx+1}/${pipeline.size()}] ('${pipeline[stageIdx].stageDisplayName}')")
 
 
 	callbackData?.get(stageState)?.eachWithIndex { curCallback, idx ->
