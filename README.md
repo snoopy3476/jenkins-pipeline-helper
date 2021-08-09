@@ -13,7 +13,7 @@
       userRemoteConfigs:
         [[url: 'https://github.com/snoopy3476/jenkins-pipeline-helper']],
       branches:
-        [[name: '*/master']] // release-X.X branch recommended
+        [[name: '*/release-1.0']] // release-X.X branch recommended
     ])
 
     
