@@ -25,7 +25,7 @@ void main () {
 		checkout ([
 			$class: 'GitSCM',
 			userRemoteConfigs: [[url: 'https://github.com/snoopy3476/jenkins-pipeline-helper']],
-			branches: [[name: '*/master']]
+			branches: [[name: '*/dev']]
 		])
 		def pipelineHelper = load ('JenkinsPipelineHelper.groovy')
 		def gitlabCallbacks = load ('SampleCallbacks/GitlabNotification.groovy')
