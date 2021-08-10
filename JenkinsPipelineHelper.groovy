@@ -60,7 +60,7 @@ boolean call (pipelineData, callbackData = null) {
 
 		// notify as pending
 		echo (' - jenkinsPipelineHelper: Pipeline triggered')
-		(0 .. pipeline.size()).each { idx ->
+		(0 ..< pipeline.size()).each { idx ->
 			onStageCallback (callbacks, 'pending', pipeline, idx)
 		}
 
