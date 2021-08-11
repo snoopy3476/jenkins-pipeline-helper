@@ -14,10 +14,10 @@
 
 
 /**
- *   Script entry point
+ *   Script entry point - make the script callable
  *
  *       @param     pipelineData    Pipeline data (Map<String,Closure>) to execute
- *       @param     callbackData    Callback data (Map<String,List>) to execute
+ *       @param     callbackData    Callback data (Map<String,List<Closure>>) to execute
  *       @return                    Result of pipeline run (Passed - true, Failed - false)
  */
 boolean call (pipelineData, callbackData = null) {
@@ -39,7 +39,7 @@ boolean call (pipelineData, callbackData = null) {
 		(Map<String,List>) callbackData // check if object is Map<String,List>
 
 		// check if all elem in list arg is closure
-		callbackData.each { curStateCallbacks ->
+		callbackData.each { Map.Entry curStateCallbacks ->
 			if (curStateCallbacks != null) {
 				(String) curStateCallbacks.key
 				(List) curStateCallbacks.value
@@ -60,7 +60,7 @@ boolean call (pipelineData, callbackData = null) {
 
 		// notify as pending
 		echo (' - jenkinsPipelineHelper: Pipeline triggered')
-		(0 ..< pipeline.size()).each { idx ->
+		(0 ..< pipeline.size()).each { int idx ->
 			onStageCallback (callbacks, 'pending', pipeline, idx)
 		}
 
@@ -89,7 +89,7 @@ boolean call (pipelineData, callbackData = null) {
  *       @return                    Pipeline
  */
 List<Map> newPipeline (Map<String,Closure> pipelineData) { (
-	[ pipelineData?.collect{it}, (1 .. (pipelineData?.size())?:1) ].transpose().collect { stageElem ->
+	[ pipelineData?.collect{it}, (1 .. (pipelineData?.size())?:1) ].transpose().collect { List stageElem ->
 		immutableMap ([
 			stageName: stageElem?.get(0)?.key,
 			stageDisplayName: "${stageElem?.get(1)}. ${stageElem?.get(0)?.key}",
@@ -141,7 +141,7 @@ boolean runPipelineStage (List<Map> pipeline, int stageIdx, List<String> stageSt
 			onStageCallback (callbackData, (e instanceof InterruptedException ? 'aborted' : 'failed'), pipeline, stageIdx, stageStateList)
 
 			// remaining as canceled
-			(stageIdx+1 .. pipeline.size()).each { idx ->
+			(stageIdx+1 ..< pipeline.size()).each { int idx ->
 				onStageCallback (callbackData, 'canceled', pipeline, idx, stageStateList)
 			}
 
@@ -170,9 +170,9 @@ boolean runPipelineStage (List<Map> pipeline, int stageIdx, List<String> stageSt
  *       @return                    Callback
  */
 Map<String,List<Closure>> newCallback (Map<String,List<Closure>> callbackData) { immutableMap(
-	callbackData?.collectEntries { curStateCallbacks -> [
+	callbackData?.collectEntries { Map.Entry curStateCallbacks -> [
 		(curStateCallbacks?.key): immutableList(
-			curStateCallbacks?.value?.collect { curCallback ->
+			curStateCallbacks?.value?.collect { Closure curCallback ->
 				curCallback?.clone ()
 			}
 		)
@@ -186,20 +186,21 @@ Map<String,List<Closure>> newCallback (Map<String,List<Closure>> callbackData) {
  *       @param     callbackData      Callback data to execute
  *       @param     pipeline          Target pipeline
  *       @param     stageIdx          Stage index to execute
- *       @param     stageStateList    Current states for each stages
+ *       @param     stageStateList    Current states for all stages: stageStateList[idx] is a state for pipeline[idx]
  */
 void onStageCallback (Map<String,List<Closure>> callbackData, String stageState, List<Map> pipeline, int stageIdx, List<String> stageStateList = []) {
 
 
 	// exit if pipeline/stageIdx is invalid
 	if (((pipeline?.size())?:0) <= stageIdx) {
+		echo (" - onStageCallback_${stageState}: Pipeline is null or stage index out of bound! Exit without doing nothing.")
 		return (null)
 	}
 
 	//echo (" - onStageCallback_${stageState} [${stageIdx+1}/${pipeline.size()}] ('${pipeline[stageIdx].stageDisplayName}')")
 
 
-	callbackData?.get(stageState)?.eachWithIndex { curCallback, idx ->
+	callbackData?.get(stageState)?.eachWithIndex { Closure curCallback, int idx ->
 		try {
 			curCallback?.call (pipeline, stageIdx, stageStateList)
 		} catch (e) {
@@ -223,11 +224,11 @@ void onStageCallback (Map<String,List<Closure>> callbackData, String stageState,
 /**
  *   Run closure using var
  *
- *       @param     var        Variable to define
- *       @param     closure    Closure to run
- *       @return               Return of closure
+ *       @param     args   Vararg - Closure arguments (all args, except for the last) + closure instance (last arg)
+ *       @return           Return of closure
  */
 def withVar (... args) {
+	// check if at least 2 args exists (closure args + closure), and last argument is closure
 	assert (args.length >= 2 || args[args.length-1] instanceof Closure)
 	
 	(args[args.length-1]) (args)
@@ -237,7 +238,8 @@ def withVar (... args) {
 /**
  *   Convert map to unmodifiable map
  *
- *       @return    Unmodifiable map
+ *       @param     input   Source input
+ *       @return            Unmodifiable map
  */
 Map immutableMap (Map input) { Collections.unmodifiableMap (
 	input?:[:]
@@ -247,7 +249,8 @@ Map immutableMap (Map input) { Collections.unmodifiableMap (
 /**
  *   Convert list to unmodifiable list
  *
- *       @return    Unmodifiable list
+ *       @param     input   Source input
+ *       @return            Unmodifiable list
  */
 List immutableList (List input) { Collections.unmodifiableList (
 	input?:[]
@@ -257,5 +260,8 @@ List immutableList (List input) { Collections.unmodifiableList (
 
 
 
-// return this: can be loaded (load('JenkinsPipelineHelper.groovy')) and called on other groovy script
+// return this:
+//   can be loaded with:   def helper = load ('JenkinsPipelineHelper.groovy')
+//   and called with:      helper (pipelineData, callbackData) // or with helper.call(...)
+//   on other groovy script
 return (this)
